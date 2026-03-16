@@ -1,0 +1,18 @@
+{
+  "projects": {
+    "default": "window-door-store-20260215"
+  },
+  "targets": {
+    "window-door-store-20260215": {
+      "hosting": {
+        "web": [
+          "kanokna"
+        ],
+        "admin": [
+          "kanokna-admin"
+        ]
+      }
+    }
+  },
+  "etags": {}
+}
