@@ -2,9 +2,14 @@
 
 import { FormEvent, useState } from "react";
 import { FirebaseError } from "firebase/app";
+import { AlertCircle, LoaderCircle } from "lucide-react";
 import { signInWithEmailAndPassword, signOut } from "firebase/auth";
 import { auth, firebaseConfigReady } from "../lib/firebase";
 import { useAdminSession } from "./AdminSessionProvider";
+import { Alert, AlertDescription, AlertTitle } from "./ui/alert";
+import { Button } from "./ui/button";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "./ui/card";
+import { Input } from "./ui/input";
 
 function formatAuthError(error: unknown): string {
   const code =
@@ -38,7 +43,7 @@ function formatAuthError(error: unknown): string {
     case "auth/network-request-failed":
       return `${code} - ошибка сети. Проверь интернет/блокировки.`;
     case "auth/invalid-api-key":
-      return `${code} - неверный Firebase API key (проверь .env.local и задеплой админку заново).`;
+      return `${code} - неверный Firebase API key (проверь admin-web/.env.local и задеплой админку заново).`;
     default:
       return `${code} - ${error instanceof Error ? error.message : "ошибка входа"}`;
   }
@@ -47,7 +52,12 @@ function formatAuthError(error: unknown): string {
 export function LoadingScreen(): JSX.Element {
   return (
     <main>
-      <div className="card">Загрузка...</div>
+      <Card className="centerCard centerCard-narrow">
+        <CardContent className="flex items-center gap-3 p-6">
+          <LoaderCircle className="h-5 w-5 animate-spin text-muted-foreground" />
+          <span>Загрузка...</span>
+        </CardContent>
+      </Card>
     </main>
   );
 }
@@ -55,12 +65,14 @@ export function LoadingScreen(): JSX.Element {
 export function MissingConfigScreen(): JSX.Element {
   return (
     <main>
-      <section className="card centerCard centerCard-wide">
-        <h1>Не настроен Firebase</h1>
-        <small>
-          Не заполнены переменные <b>NEXT_PUBLIC_FIREBASE_*</b>. Проверь <b>.env.local</b> и пересобери админку.
-        </small>
-      </section>
+      <Card className="centerCard centerCard-wide">
+        <CardHeader className="p-0">
+          <CardTitle>Не настроен Firebase</CardTitle>
+          <CardDescription>
+            Не заполнены переменные <b>NEXT_PUBLIC_FIREBASE_*</b>. Проверь <b>admin-web/.env.local</b> и пересобери админку.
+          </CardDescription>
+        </CardHeader>
+      </Card>
     </main>
   );
 }
@@ -95,23 +107,33 @@ export function AdminLoginScreen({
 
   return (
     <main>
-      <section className="card centerCard centerCard-narrow">
-        <h1>{title}</h1>
-        <small>{subtitle}</small>
-        <form onSubmit={onLogin} className="grid" style={{ gap: 10 }}>
-          <input placeholder="Email" value={email} onChange={(e) => setEmail(e.target.value)} autoCapitalize="none" />
-          <input
-            placeholder="Пароль"
-            type="password"
-            value={password}
-            onChange={(e) => setPassword(e.target.value)}
-          />
-          {error ? <div className="errorBox">{error}</div> : null}
-          <button type="submit" disabled={submitting}>
-            {submitting ? "Вход..." : "Войти"}
-          </button>
-        </form>
-      </section>
+      <Card className="centerCard centerCard-narrow overflow-hidden">
+        <CardHeader className="space-y-2 p-6 pb-0">
+          <CardTitle>{title}</CardTitle>
+          <CardDescription>{subtitle}</CardDescription>
+        </CardHeader>
+        <CardContent className="p-6">
+          <form onSubmit={onLogin} className="grid" style={{ gap: 10 }}>
+            <Input placeholder="Email" value={email} onChange={(e) => setEmail(e.target.value)} autoCapitalize="none" />
+            <Input
+              placeholder="Пароль"
+              type="password"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+            />
+            {error ? (
+              <Alert variant="destructive">
+                <AlertCircle className="h-4 w-4" />
+                <AlertTitle>Ошибка входа</AlertTitle>
+                <AlertDescription>{error}</AlertDescription>
+              </Alert>
+            ) : null}
+            <Button type="submit" disabled={submitting}>
+              {submitting ? "Вход..." : "Войти"}
+            </Button>
+          </form>
+        </CardContent>
+      </Card>
     </main>
   );
 }
@@ -125,13 +147,15 @@ export function NoAccessScreen(): JSX.Element {
 
   return (
     <main>
-      <section className="card centerCard centerCard-wide">
-        <h1>{roleCheckFailed ? "Не удалось проверить роль" : "Нет доступа"}</h1>
-        <small>
-          {roleCheckFailed
-            ? "Админка не смогла прочитать документ пользователя из Firestore."
-            : "У этого аккаунта нет роли администратора."}
-        </small>
+      <Card className="centerCard centerCard-wide">
+        <CardHeader className="space-y-2 p-0">
+          <CardTitle>{roleCheckFailed ? "Не удалось проверить роль" : "Нет доступа"}</CardTitle>
+          <CardDescription>
+            {roleCheckFailed
+              ? "Админка не смогла прочитать документ пользователя из Firestore."
+              : "У этого аккаунта нет роли администратора."}
+          </CardDescription>
+        </CardHeader>
         {uid ? (
           <div style={{ marginTop: 10, display: "grid", gap: 6 }}>
             <small>
@@ -155,13 +179,15 @@ export function NoAccessScreen(): JSX.Element {
         ) : null}
         <div style={{ marginTop: 12, display: "flex", gap: 10, flexWrap: "wrap" }}>
           {roleCheckFailed ? (
-            <button onClick={() => globalThis.location?.reload()}>Повторить</button>
+            <Button type="button" onClick={() => globalThis.location?.reload()}>
+              Повторить
+            </Button>
           ) : null}
-          <button onClick={() => void signOut(auth!)} disabled={!auth}>
+          <Button type="button" variant="outline" onClick={() => void signOut(auth!)} disabled={!auth}>
             Выйти
-          </button>
+          </Button>
         </div>
-      </section>
+      </Card>
     </main>
   );
 }

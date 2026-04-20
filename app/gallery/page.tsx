@@ -1,8 +1,7 @@
 "use client";
 
 import { Fragment, useCallback, useEffect, useMemo, useState } from "react";
-import { useRouter } from "next/navigation";
-import { signOut } from "firebase/auth";
+import { ImageIcon } from "lucide-react";
 import {
   collection,
   deleteDoc,
@@ -14,12 +13,19 @@ import {
   serverTimestamp,
   updateDoc,
 } from "firebase/firestore";
-import { auth, db } from "../../lib/firebase";
+import { db } from "../../lib/firebase";
+import { useConfirmDialog } from "../../components/ConfirmDialogProvider";
 import { AdminLoginScreen, LoadingScreen, MissingConfigScreen, NoAccessScreen } from "../../components/AdminScreens";
 import { useAdminSession } from "../../components/AdminSessionProvider";
 import { AdminShell } from "../../components/AdminShell";
+import { ActionIconButton, EmptyState, PageAlert, SectionCard, SwitchField, ToneBadge } from "../../components/admin-kit";
 import { EyeIcon, EyeOffIcon, PencilIcon, TrashIcon } from "../../components/Icons";
 import { ImageUrlList } from "../../components/forms/ImageUrlList";
+import { Badge } from "../../components/ui/badge";
+import { Button } from "../../components/ui/button";
+import { Card, CardContent, CardHeader, CardTitle } from "../../components/ui/card";
+import { Input } from "../../components/ui/input";
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../../components/ui/table";
 
 type GalleryItem = {
   id: string;
@@ -50,7 +56,7 @@ function normalizeImageUrls(urls: string[]): string[] {
 
 export default function GalleryPage(): JSX.Element {
   const session = useAdminSession();
-  const router = useRouter();
+  const confirm = useConfirmDialog();
 
   const [loadError, setLoadError] = useState<string | null>(null);
   const [loadingData, setLoadingData] = useState(false);
@@ -179,7 +185,12 @@ export default function GalleryPage(): JSX.Element {
 
   const onDeleteGallery = async (item: GalleryItem) => {
     if (!db) return;
-    const ok = confirm(`Удалить кейс "${item.title}"? Это действие необратимо.`);
+    const ok = await confirm({
+      title: `Удалить кейс "${item.title}"?`,
+      description: "Это действие необратимо.",
+      confirmLabel: "Удалить",
+      variant: "destructive",
+    });
     if (!ok) return;
     await deleteDoc(doc(db, "gallery", item.id));
     await loadGallery();
@@ -191,21 +202,24 @@ export default function GalleryPage(): JSX.Element {
   );
 
   const galleryEditor = (
-    <div className="editPanel">
-      <div className="editGrid">
-        <div className="grid" style={{ gap: 10 }}>
-          <input
+    <Card className="border-border/80 bg-background/60">
+      <CardHeader className="gap-1">
+        <CardTitle className="text-lg">Редактирование кейса</CardTitle>
+      </CardHeader>
+      <CardContent className="grid gap-6 pt-0">
+        <div className="grid gap-4">
+          <Input
             placeholder="Название"
             value={galleryDraft.title}
             onChange={(e) => setGalleryDraft((prev) => ({ ...prev, title: e.target.value }))}
           />
-          <div className="grid cols-2" style={{ gap: 10 }}>
-            <input
+          <div className="grid gap-4 lg:grid-cols-2">
+            <Input
               placeholder="Город"
               value={galleryDraft.city}
               onChange={(e) => setGalleryDraft((prev) => ({ ...prev, city: e.target.value }))}
             />
-            <input
+            <Input
               placeholder="Тип проекта (например: окно/дверь)"
               value={galleryDraft.projectType}
               onChange={(e) => setGalleryDraft((prev) => ({ ...prev, projectType: e.target.value }))}
@@ -220,28 +234,25 @@ export default function GalleryPage(): JSX.Element {
             disabled={gallerySaving}
             uploadFolder="gallery"
           />
-          <label className="row" style={{ gap: 10, alignItems: "center" }}>
-            <input
-              type="checkbox"
-              checked={galleryDraft.active}
-              onChange={(e) => setGalleryDraft((prev) => ({ ...prev, active: e.target.checked }))}
-            />
-            <span>Показывать в приложении</span>
-          </label>
+          <SwitchField
+            title="Показывать в приложении"
+            checked={galleryDraft.active}
+            onCheckedChange={(checked) => setGalleryDraft((prev) => ({ ...prev, active: checked }))}
+          />
         </div>
-      </div>
 
-      {galleryDraftError ? <div className="errorBox">{galleryDraftError}</div> : null}
+        {galleryDraftError ? <PageAlert title="Не удалось сохранить кейс" description={galleryDraftError} /> : null}
 
-      <div className="rowActions" style={{ justifyContent: "flex-end" }}>
-        <button type="button" className="secondary" onClick={cancelEditGallery} disabled={gallerySaving}>
-          Отмена
-        </button>
-        <button type="button" onClick={() => void onSaveGallery()} disabled={gallerySaving}>
-          {gallerySaving ? "Сохранение..." : "Сохранить"}
-        </button>
-      </div>
-    </div>
+        <div className="flex flex-wrap justify-end gap-3">
+          <Button type="button" variant="outline" onClick={cancelEditGallery} disabled={gallerySaving}>
+            Отмена
+          </Button>
+          <Button type="button" onClick={() => void onSaveGallery()} disabled={gallerySaving}>
+            {gallerySaving ? "Сохранение..." : "Сохранить"}
+          </Button>
+        </div>
+      </CardContent>
+    </Card>
   );
 
   if (session.status === "loading") return <LoadingScreen />;
@@ -253,178 +264,131 @@ export default function GalleryPage(): JSX.Element {
     <AdminShell
       title="Портфолио"
       subtitle={session.user?.email ?? ""}
-      rightActions={
-        <>
-          <button className="secondary" onClick={() => router.push("/gallery/new")}>
-            Добавить
-          </button>
-          <button className="secondary" onClick={() => void loadGallery()} disabled={loadingData}>
-            Обновить
-          </button>
-          <button onClick={() => void signOut(auth!)} disabled={!auth}>
-            Выйти
-          </button>
-        </>
-      }
     >
+      <div className="flex flex-col gap-6">
+        {loadError ? <PageAlert title="Ошибка загрузки данных" description={loadError} /> : null}
 
-      {loadError ? (
-        <section className="card noticeCard noticeCard-error">
-          <h3 style={{ marginBottom: 6 }}>Ошибка загрузки данных</h3>
-          <small className="noticeText-danger">{loadError}</small>
-        </section>
-      ) : null}
-
-      <section className="card">
-        <div className="rowActions" style={{ justifyContent: "space-between" }}>
-          <div style={{ display: "grid", gap: 2 }}>
-            <h2>Список</h2>
-            <small>{gallery.length} шт.</small>
-          </div>
-          <small>Добавление: кнопка + внизу справа.</small>
-        </div>
-
-        <div className="mobileOnly" style={{ marginTop: 12 }}>
-          {gallery.length ? (
-            <div className="cardList">
-              {gallery.map((item) => {
-                const visible = isVisible(item.active);
-                const isEditing = editingGalleryId === item.id;
-
-                return (
-                  <div key={item.id} className="itemCard">
-                    <div className="itemHeader">
-                      <div style={{ display: "grid", gap: 2, minWidth: 0 }}>
-                        <b>{item.title}</b>
-                        <small className="breakLong">{item.id}</small>
-                      </div>
-                      {visible ? <span className="badge">Показано</span> : <span className="badge badge-muted">Скрыто</span>}
-                    </div>
-
-                    <div className="kv">
-                      <div className="kvRow">
-                        <div className="kvLabel">Тип</div>
-                        <div className="kvValue">{item.projectType ?? "-"}</div>
-                      </div>
-                      <div className="kvRow">
-                        <div className="kvLabel">Город</div>
-                        <div className="kvValue">{item.city ?? "-"}</div>
-                      </div>
-                    </div>
-
-                    <div className="rowActions" style={{ justifyContent: "flex-end" }}>
-                      <button
-                        type="button"
-                        className="iconBtn iconBtn-secondary"
-                        aria-label="Изменить"
-                        title="Изменить"
-                        onClick={() => startEditGallery(item)}
-                      >
-                        <PencilIcon />
-                      </button>
-                      <button
-                        type="button"
-                        className="iconBtn iconBtn-secondary"
-                        aria-label={visible ? "Скрыть" : "Показать"}
-                        title={visible ? "Скрыть" : "Показать"}
-                        onClick={() => void onToggleGalleryVisibility(item)}
-                      >
-                        {visible ? <EyeOffIcon /> : <EyeIcon />}
-                      </button>
-                      <button
-                        type="button"
-                        className="iconBtn iconBtn-danger"
-                        aria-label="Удалить"
-                        title="Удалить"
-                        onClick={() => void onDeleteGallery(item)}
-                      >
-                        <TrashIcon />
-                      </button>
-                    </div>
-
-                    {isEditing ? galleryEditor : null}
-                  </div>
-                );
-              })}
-            </div>
+        <SectionCard
+          eyebrow="Портфолио"
+          title="Кейсы"
+          description="Управление публикацией выполненных работ и их визуальным наполнением."
+          icon={ImageIcon}
+          tone="violet"
+          footer={
+            <>
+              <div className="text-sm text-muted-foreground">{gallery.length} шт.</div>
+              <Badge variant="outline">Firestore → gallery</Badge>
+            </>
+          }
+        >
+          {!gallery.length ? (
+            <EmptyState title="Пока нет кейсов" description="Добавьте первый кейс, чтобы наполнить портфолио." />
           ) : (
-            <small>Пока нет кейсов.</small>
-          )}
-        </div>
-
-        <div className="desktopOnly" style={{ marginTop: 12 }}>
-          <div className="tableWrap">
-            <table>
-              <thead>
-                <tr>
-                  <th>Название</th>
-                  <th>Тип</th>
-                  <th>Статус</th>
-                  <th className="actionsCol">Действия</th>
-                </tr>
-              </thead>
-              <tbody>
+            <div className="grid gap-4">
+              <div className="grid gap-3 lg:hidden">
                 {gallery.map((item) => {
                   const visible = isVisible(item.active);
                   const isEditing = editingGalleryId === item.id;
 
                   return (
-                    <Fragment key={item.id}>
-                      <tr>
-                        <td>
-                          <div style={{ display: "grid", gap: 4 }}>
-                            <b>{item.title}</b>
-                            <small className="breakLong">{item.id}</small>
+                    <Card key={item.id} className="border-border/80">
+                      <CardHeader className="gap-3">
+                        <div className="flex items-start justify-between gap-3">
+                          <div className="grid min-w-0 gap-1">
+                            <CardTitle className="text-base">{item.title}</CardTitle>
+                            <div className="breakLong text-sm text-muted-foreground">{item.id}</div>
                           </div>
-                        </td>
-                        <td>{item.projectType ?? "-"}</td>
-                        <td>{visible ? <span className="badge">Показано</span> : <span className="badge badge-muted">Скрыто</span>}</td>
-                        <td>
-                          <div className="rowActions">
-                            <button
-                              type="button"
-                              className="iconBtn iconBtn-secondary"
-                              aria-label="Изменить"
-                              title="Изменить"
-                              onClick={() => startEditGallery(item)}
-                            >
-                              <PencilIcon />
-                            </button>
-                            <button
-                              type="button"
-                              className="iconBtn iconBtn-secondary"
-                              aria-label={visible ? "Скрыть" : "Показать"}
-                              title={visible ? "Скрыть" : "Показать"}
-                              onClick={() => void onToggleGalleryVisibility(item)}
-                            >
-                              {visible ? <EyeOffIcon /> : <EyeIcon />}
-                            </button>
-                            <button
-                              type="button"
-                              className="iconBtn iconBtn-danger"
-                              aria-label="Удалить"
-                              title="Удалить"
-                              onClick={() => void onDeleteGallery(item)}
-                            >
-                              <TrashIcon />
-                            </button>
-                          </div>
-                        </td>
-                      </tr>
-
-                      {isEditing ? (
-                        <tr>
-                          <td colSpan={4}>{galleryEditor}</td>
-                        </tr>
-                      ) : null}
-                    </Fragment>
+                          {visible ? <ToneBadge tone="default">Показано</ToneBadge> : <ToneBadge tone="muted">Скрыто</ToneBadge>}
+                        </div>
+                      </CardHeader>
+                      <CardContent className="grid gap-4 pt-0">
+                        <div className="grid gap-1 text-sm">
+                          <div className="text-muted-foreground">Тип: {item.projectType ?? "-"}</div>
+                          <div className="text-muted-foreground">Город: {item.city ?? "-"}</div>
+                        </div>
+                        <div className="flex flex-wrap justify-end gap-2">
+                          <ActionIconButton aria-label="Изменить" title="Изменить" onClick={() => startEditGallery(item)}>
+                            <PencilIcon />
+                          </ActionIconButton>
+                          <ActionIconButton
+                            aria-label={visible ? "Скрыть" : "Показать"}
+                            title={visible ? "Скрыть" : "Показать"}
+                            onClick={() => void onToggleGalleryVisibility(item)}
+                          >
+                            {visible ? <EyeOffIcon /> : <EyeIcon />}
+                          </ActionIconButton>
+                          <ActionIconButton variant="destructive" aria-label="Удалить" title="Удалить" onClick={() => void onDeleteGallery(item)}>
+                            <TrashIcon />
+                          </ActionIconButton>
+                        </div>
+                        {isEditing ? galleryEditor : null}
+                      </CardContent>
+                    </Card>
                   );
                 })}
-              </tbody>
-            </table>
-          </div>
-        </div>
-      </section>
+              </div>
+
+              <div className="hidden lg:block">
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>Название</TableHead>
+                      <TableHead>Тип</TableHead>
+                      <TableHead>Статус</TableHead>
+                      <TableHead>Действия</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {gallery.map((item) => {
+                      const visible = isVisible(item.active);
+                      const isEditing = editingGalleryId === item.id;
+
+                      return (
+                        <Fragment key={item.id}>
+                          <TableRow>
+                            <TableCell>
+                              <div className="grid gap-1">
+                                <b>{item.title}</b>
+                                <small className="breakLong">{item.id}</small>
+                              </div>
+                            </TableCell>
+                            <TableCell>{item.projectType ?? "-"}</TableCell>
+                            <TableCell>
+                              {visible ? <ToneBadge tone="default">Показано</ToneBadge> : <ToneBadge tone="muted">Скрыто</ToneBadge>}
+                            </TableCell>
+                            <TableCell>
+                              <div className="flex flex-wrap gap-2">
+                                <ActionIconButton aria-label="Изменить" title="Изменить" onClick={() => startEditGallery(item)}>
+                                  <PencilIcon />
+                                </ActionIconButton>
+                                <ActionIconButton
+                                  aria-label={visible ? "Скрыть" : "Показать"}
+                                  title={visible ? "Скрыть" : "Показать"}
+                                  onClick={() => void onToggleGalleryVisibility(item)}
+                                >
+                                  {visible ? <EyeOffIcon /> : <EyeIcon />}
+                                </ActionIconButton>
+                                <ActionIconButton variant="destructive" aria-label="Удалить" title="Удалить" onClick={() => void onDeleteGallery(item)}>
+                                  <TrashIcon />
+                                </ActionIconButton>
+                              </div>
+                            </TableCell>
+                          </TableRow>
+                          {isEditing ? (
+                            <TableRow>
+                              <TableCell colSpan={4}>{galleryEditor}</TableCell>
+                            </TableRow>
+                          ) : null}
+                        </Fragment>
+                      );
+                    })}
+                  </TableBody>
+                </Table>
+              </div>
+            </div>
+          )}
+        </SectionCard>
+      </div>
     </AdminShell>
   );
 }

@@ -1,6 +1,8 @@
 "use client";
 
 import { usePathname, useRouter } from "next/navigation";
+import { Card } from "./ui/card";
+import { Tabs, TabsList, TabsTrigger } from "./ui/tabs";
 
 type PromosTab = "banners" | "codes";
 
@@ -15,24 +17,16 @@ export function PromosTabs(): JSX.Element {
   const active = tabFromPathname(pathname);
 
   return (
-    <section className="card" style={{ padding: 12 }}>
-      <div className="rowActions" aria-label="Раздел акций">
-        <button
-          type="button"
-          className={`secondary small ${active === "banners" ? "adminNavLink-active" : ""}`}
-          onClick={() => router.push("/promos")}
-        >
-          Баннеры
-        </button>
-        <button
-          type="button"
-          className={`secondary small ${active === "codes" ? "adminNavLink-active" : ""}`}
-          onClick={() => router.push("/promos/codes")}
-        >
-          Промокоды
-        </button>
-      </div>
-    </section>
+    <Card className="p-3">
+      <Tabs
+        value={active}
+        onValueChange={(next) => router.push(next === "codes" ? "/promos/codes" : "/promos")}
+      >
+        <TabsList className="grid w-full grid-cols-2 sm:w-fit">
+          <TabsTrigger value="banners">Баннеры</TabsTrigger>
+          <TabsTrigger value="codes">Промокоды</TabsTrigger>
+        </TabsList>
+      </Tabs>
+    </Card>
   );
 }
-

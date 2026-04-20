@@ -4,6 +4,8 @@ import { useMemo, useRef, useState } from "react";
 import { db } from "../../lib/firebase";
 import { uploadMediaFile, type MediaFolder } from "../../lib/media";
 import { useAdminSession } from "../AdminSessionProvider";
+import { Button, type ButtonProps } from "../ui/button";
+import { Input } from "../ui/input";
 import { ImageThumbPreview } from "./ImageThumbPreview";
 
 export function MediaUploadButton({
@@ -13,7 +15,9 @@ export function MediaUploadButton({
   label = "Загрузить",
   showPreview = false,
   disabled,
-  className = "secondary small",
+  className,
+  variant = "secondary",
+  size = "sm",
   onUploaded,
 }: {
   folder: MediaFolder;
@@ -23,6 +27,8 @@ export function MediaUploadButton({
   showPreview?: boolean;
   disabled?: boolean;
   className?: string;
+  variant?: ButtonProps["variant"];
+  size?: ButtonProps["size"];
   onUploaded: (urls: string[]) => void;
 }): JSX.Element {
   const session = useAdminSession();
@@ -89,7 +95,7 @@ export function MediaUploadButton({
 
   return (
     <span style={{ display: "inline-flex", flexDirection: "column", gap: 6, alignItems: "flex-end" }}>
-      <input
+      <Input
         ref={inputRef}
         type="file"
         accept={accept}
@@ -97,9 +103,9 @@ export function MediaUploadButton({
         style={{ display: "none" }}
         onChange={(e) => void onPick(e.currentTarget.files)}
       />
-      <button type="button" className={className} onClick={openPicker} disabled={isDisabled}>
+      <Button type="button" className={className} variant={variant} size={size} onClick={openPicker} disabled={isDisabled}>
         {buttonLabel}
-      </button>
+      </Button>
       {showPreview && lastUploadedUrls[0] ? <ImageThumbPreview url={lastUploadedUrls[0]} size={64} /> : null}
       {error ? <small className="noticeText-danger">{error}</small> : null}
     </span>

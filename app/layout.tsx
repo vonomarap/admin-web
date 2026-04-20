@@ -1,27 +1,12 @@
 import type { Metadata } from "next";
 import type { Viewport } from "next";
 import type { ReactNode } from "react";
-import { IBM_Plex_Mono, IBM_Plex_Sans } from "next/font/google";
+import { AdminToaster } from "../components/AdminToaster";
+import { ConfirmDialogProvider } from "../components/ConfirmDialogProvider";
 import { AdminSessionProvider } from "../components/AdminSessionProvider";
-import { AdminThemeProvider } from "../components/AdminThemeProvider";
 import { FabMenu } from "../components/FabMenu";
-import "@fortawesome/fontawesome-svg-core/styles.css";
-import "../lib/fontawesome";
+import { ThemeProvider } from "../components/theme-provider";
 import "./globals.css";
-
-const sans = IBM_Plex_Sans({
-  subsets: ["latin", "cyrillic"],
-  weight: ["400", "500", "600", "700"],
-  variable: "--font-sans",
-  display: "swap",
-});
-
-const mono = IBM_Plex_Mono({
-  subsets: ["latin", "cyrillic"],
-  weight: ["500", "600", "700"],
-  variable: "--font-mono",
-  display: "swap",
-});
 
 export const metadata: Metadata = {
   title: "Админ-панель",
@@ -46,14 +31,17 @@ export default function RootLayout({
   children: ReactNode;
 }>) {
   return (
-    <html lang="ru" className={`${sans.variable} ${mono.variable}`} data-theme="light">
-      <body>
-        <AdminThemeProvider>
-          <AdminSessionProvider>
-            {children}
-            <FabMenu />
-          </AdminSessionProvider>
-        </AdminThemeProvider>
+    <html lang="ru" suppressHydrationWarning>
+      <body className="min-h-screen bg-background font-sans text-foreground antialiased">
+        <ThemeProvider attribute="class" defaultTheme="light" enableSystem={false} disableTransitionOnChange>
+          <ConfirmDialogProvider>
+            <AdminSessionProvider>
+              {children}
+              <FabMenu />
+              <AdminToaster />
+            </AdminSessionProvider>
+          </ConfirmDialogProvider>
+        </ThemeProvider>
       </body>
     </html>
   );

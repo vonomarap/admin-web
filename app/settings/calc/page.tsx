@@ -1,30 +1,38 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { signOut } from "firebase/auth";
 import { doc, getDoc, serverTimestamp, setDoc } from "firebase/firestore";
-import { auth, db } from "../../../lib/firebase";
+import { db } from "../../../lib/firebase";
 import { useAdminSession } from "../../../components/AdminSessionProvider";
 import { AdminLoginScreen, LoadingScreen, MissingConfigScreen, NoAccessScreen } from "../../../components/AdminScreens";
 import { AdminShell } from "../../../components/AdminShell";
+import { EmptyState, FieldBlock, PageAlert, SectionCard, SwitchField, ToneBadge } from "../../../components/admin-kit";
 import { CollapsibleSection } from "../../../components/CollapsibleSection";
 import { KeyNumberTable } from "../../../components/forms/KeyNumberTable";
+import { Button } from "../../../components/ui/button";
+import { Input } from "../../../components/ui/input";
+import { NativeSelect } from "../../../components/ui/native-select";
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../../../components/ui/table";
+import { ToggleGroup, ToggleGroupItem } from "../../../components/ui/toggle-group";
 import { normalizeCalcConfig, type CalcConfigFull, getDefaultCalcConfigFull } from "../../../lib/calcConfig";
 import {
   BASE_RATE_LABELS,
   DOOR_SUBTYPE_LABELS,
   DESIGN_OPTION_LABELS,
   ENTRANCE_FILL_LABELS,
+  GLASS_OPTION_LABELS,
   GLAZING_LABELS,
   KNOWN_OPTION_KEYS,
+  LAMINATION_COLOR_LABELS,
   LAMINATION_GROUP_LABELS,
   LAMINATION_LABELS,
   LAMINATION_SIDE_LABELS,
   OPENING_TYPE_LABELS,
   OPTION_LABELS,
+  PROFILE_MODEL_LABELS,
   PROFILE_SERIES_LABELS,
 } from "../../../lib/calcConstants";
-import { calculateQuote, type CalcInput } from "../../../lib/calcPreview";
+import { calculateQuote, type CalcInput, type CalcResultDTO } from "../../../lib/calcPreview";
 
 function toNumber(value: string): number | null {
   const raw = value.trim();
@@ -48,11 +56,148 @@ function clampInt(value: number, min: number, max: number): number {
 type HardwareOptionDraft = {
   key: string;
   label: string;
+  description: string;
+  enabled: boolean;
+};
+
+type ProfileModelDraft = {
+  key: string;
+  label: string;
+  brand: string;
+  depthMm: string;
+  chambers: string;
+  thermalCoefficient: string;
+  description: string;
+  legacySeries: string;
+  legacyDepthMm: string;
+  enabled: boolean;
+};
+
+type GlassOptionDraft = {
+  key: string;
+  label: string;
+  description: string;
   enabled: boolean;
 };
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+type ModeOption<T extends string> = {
+  value: T;
+  label: string;
+};
+
+function ModeToggleGroup<T extends string>({
+  value,
+  onChange,
+  options,
+  className,
+}: {
+  value: T;
+  onChange: (next: T) => void;
+  options: ModeOption<T>[];
+  className?: string;
+}): JSX.Element {
+  return (
+    <ToggleGroup
+      type="single"
+      value={value}
+      onValueChange={(next) => {
+        if (next) onChange(next as T);
+      }}
+      variant="outline"
+      size="sm"
+      spacing={2}
+      className={["grid w-full grid-cols-1 gap-2 sm:grid-cols-2", className].filter(Boolean).join(" ")}
+    >
+      {options.map((option) => (
+        <ToggleGroupItem key={option.value} value={option.value} className="h-9 min-w-0 justify-center px-3 text-center">
+          {option.label}
+        </ToggleGroupItem>
+      ))}
+    </ToggleGroup>
+  );
+}
+
+const ALLOWED_GLASS_OPTION_KEYS = new Set(Object.keys(GLASS_OPTION_LABELS));
+
+function NumberStepperField({
+  label,
+  value,
+  onChange,
+  inputMode = "numeric",
+  min,
+  max,
+  step = 1,
+  disabled,
+  className,
+}: {
+  label: string;
+  value: string;
+  onChange: (next: string) => void;
+  inputMode?: "decimal" | "numeric";
+  min?: number;
+  max?: number;
+  step?: number;
+  disabled?: boolean;
+  className?: string;
+}): JSX.Element {
+  const numericValue = toNumber(value);
+
+  const clampValue = (next: number): number => {
+    let result = next;
+    if (min != null) result = Math.max(min, result);
+    if (max != null) result = Math.min(max, result);
+    return result;
+  };
+
+  const applyStep = (delta: -1 | 1) => {
+    const fallback = numericValue ?? min ?? 0;
+    const next = clampValue(fallback + delta * step);
+    const normalized = Number.isInteger(step) ? String(Math.round(next)) : String(Number(next.toFixed(2)));
+    onChange(normalized);
+  };
+
+  const canDecrement = !disabled && (numericValue != null ? (min == null ? true : numericValue > min) : min !== undefined);
+  const canIncrement = !disabled && (numericValue != null ? (max == null ? true : numericValue < max) : true);
+
+  return (
+    <FieldBlock label={label} className={className}>
+      <div className="grid h-10 grid-cols-[2.5rem_minmax(0,1fr)_2.5rem] overflow-hidden rounded-md border border-input bg-background shadow-xs transition-[border-color,box-shadow] focus-within:border-ring focus-within:ring-[3px] focus-within:ring-ring/50 data-[disabled=true]:opacity-60" data-disabled={disabled ? "true" : undefined}>
+        <Button
+          type="button"
+          variant="ghost"
+          size="icon"
+          className="h-10 rounded-none border-r border-border/70 shadow-none"
+          disabled={!canDecrement}
+          onClick={() => applyStep(-1)}
+          aria-label={`Уменьшить: ${label}`}
+        >
+          -
+        </Button>
+        <Input
+          value={value}
+          onChange={(e) => onChange(e.target.value)}
+          inputMode={inputMode}
+          disabled={disabled}
+          className="h-10 rounded-none border-0 bg-transparent text-center shadow-none focus-visible:ring-0 focus-visible:ring-offset-0"
+        />
+        <Button
+          type="button"
+          variant="ghost"
+          size="icon"
+          className="h-10 rounded-none border-l border-border/70 shadow-none"
+          disabled={!canIncrement}
+          onClick={() => applyStep(1)}
+          aria-label={`Увеличить: ${label}`}
+        >
+          +
+        </Button>
+      </div>
+    </FieldBlock>
+  );
 }
 
 export default function CalcSettingsPage(): JSX.Element {
@@ -65,20 +210,25 @@ export default function CalcSettingsPage(): JSX.Element {
   const [resetKey, setResetKey] = useState(0);
   const [warnings, setWarnings] = useState<string[]>([]);
   const [extras, setExtras] = useState<Record<string, unknown>>({});
+  const [profileModels, setProfileModels] = useState<ProfileModelDraft[]>([]);
+  const [glassOptionCatalog, setGlassOptionCatalog] = useState<GlassOptionDraft[]>([]);
   const [hardwareOptions, setHardwareOptions] = useState<HardwareOptionDraft[]>([]);
 
   const [baseRates, setBaseRates] = useState<Record<string, number>>({});
   const [coeffMaterial, setCoeffMaterial] = useState<Record<string, number>>({});
+  const [coeffProfileModel, setCoeffProfileModel] = useState<Record<string, number>>({});
   const [coeffProfileSeries, setCoeffProfileSeries] = useState<Record<string, number>>({});
   const [coeffProfileDepthMm, setCoeffProfileDepthMm] = useState<Record<string, number>>({});
   const [coeffGlazing, setCoeffGlazing] = useState<Record<string, number>>({});
   const [coeffLamination, setCoeffLamination] = useState<Record<string, number>>({});
   const [coeffLaminationSide, setCoeffLaminationSide] = useState<Record<string, number>>({});
   const [coeffLaminationGroup, setCoeffLaminationGroup] = useState<Record<string, number>>({});
+  const [coeffLaminationColor, setCoeffLaminationColor] = useState<Record<string, number>>({});
   const [coeffDoorFillType, setCoeffDoorFillType] = useState<Record<string, number>>({});
+  const [coeffDoorFillTop, setCoeffDoorFillTop] = useState<Record<string, number>>({});
+  const [coeffDoorFillBottom, setCoeffDoorFillBottom] = useState<Record<string, number>>({});
 
-  const [glassEnergySavingCoeff, setGlassEnergySavingCoeff] = useState<string>("");
-  const [glassMultiFunctionalCoeff, setGlassMultiFunctionalCoeff] = useState<string>("");
+  const [glassOptionCoefficients, setGlassOptionCoefficients] = useState<Record<string, string>>({});
 
   const [optionsFlat, setOptionsFlat] = useState<Record<string, number>>({});
   const [optionsPerM2, setOptionsPerM2] = useState<Record<string, number>>({});
@@ -119,40 +269,60 @@ export default function CalcSettingsPage(): JSX.Element {
 
       setWarnings(normalized.warnings);
       setExtras(normalized.extras);
-      {
-        const uiCatalog = isRecord(normalized.extras.uiCatalog) ? normalized.extras.uiCatalog : null;
-        const rawList = uiCatalog && Array.isArray((uiCatalog as any).hardwareOptions) ? (uiCatalog as any).hardwareOptions : [];
-        const parsed: HardwareOptionDraft[] = Array.isArray(rawList)
-          ? rawList
-              .map((item) => {
-                if (!isRecord(item)) return null;
-                const key = typeof item.key === "string" ? item.key.trim() : "";
-                const label = typeof item.label === "string" ? item.label.trim() : "";
-                const enabled = item.enabled !== false;
-                if (!key && !label) return null;
-                return { key, label, enabled };
-              })
-              .filter((v): v is HardwareOptionDraft => Boolean(v))
-          : [];
-        setHardwareOptions(parsed);
-      }
+      setProfileModels(
+        (config.uiCatalog.profileModels ?? []).map((item) => ({
+          key: typeof item?.key === "string" ? item.key.trim() : "",
+          label: typeof item?.label === "string" ? item.label.trim() : "",
+          brand: typeof item?.brand === "string" ? item.brand.trim() : "",
+          depthMm: item?.depthMm == null ? "" : String(item.depthMm),
+          chambers: item?.chambers == null ? "" : String(item.chambers),
+          thermalCoefficient: typeof item?.thermalCoefficient === "string" ? item.thermalCoefficient.trim() : "",
+          description: typeof item?.description === "string" ? item.description.trim() : "",
+          legacySeries: typeof item?.legacySeries === "string" ? item.legacySeries.trim() : "",
+          legacyDepthMm: item?.legacyDepthMm == null ? "" : String(item.legacyDepthMm),
+          enabled: item?.enabled !== false,
+        }))
+      );
+      setGlassOptionCatalog(
+        (config.uiCatalog.glassOptions ?? []).flatMap((item) => {
+          const key = typeof item?.key === "string" ? item.key.trim() : "";
+          if (!key || !ALLOWED_GLASS_OPTION_KEYS.has(key)) return [];
+          return [{
+            key,
+            label: typeof item?.label === "string" ? item.label.trim() : "",
+            description: typeof item?.description === "string" ? item.description.trim() : "",
+            enabled: item?.enabled !== false,
+          }];
+        })
+      );
+      setHardwareOptions(
+        (config.uiCatalog.hardwareOptions ?? []).map((item) => ({
+          key: typeof item?.key === "string" ? item.key.trim() : "",
+          label: typeof item?.label === "string" ? item.label.trim() : "",
+          description: typeof item?.description === "string" ? item.description.trim() : "",
+          enabled: item?.enabled !== false,
+        }))
+      );
 
       setBaseRates(config.baseRates);
 
       setCoeffMaterial(config.coefficients.material);
+      setCoeffProfileModel(config.coefficients.profileModel);
       setCoeffProfileSeries(config.coefficients.profileSeries);
       setCoeffProfileDepthMm(config.coefficients.profileDepthMm);
       setCoeffGlazing(config.coefficients.glazing);
       setCoeffLamination(config.coefficients.lamination);
       setCoeffLaminationSide(config.coefficients.laminationSide);
       setCoeffLaminationGroup(config.coefficients.laminationGroup);
+      setCoeffLaminationColor(config.coefficients.laminationColor);
       setCoeffDoorFillType(config.coefficients.door.fillType);
+      setCoeffDoorFillTop(config.coefficients.door.fillTop);
+      setCoeffDoorFillBottom(config.coefficients.door.fillBottom);
 
-      setGlassEnergySavingCoeff(
-        config.coefficients.glassOptions.energySaving == null ? "" : String(config.coefficients.glassOptions.energySaving)
-      );
-      setGlassMultiFunctionalCoeff(
-        config.coefficients.glassOptions.multiFunctional == null ? "" : String(config.coefficients.glassOptions.multiFunctional)
+      setGlassOptionCoefficients(
+        Object.fromEntries(
+          Object.entries(config.coefficients.glassOptions ?? {}).map(([key, value]) => [key, value == null ? "" : String(value)])
+        )
       );
 
       {
@@ -214,9 +384,12 @@ export default function CalcSettingsPage(): JSX.Element {
 
   const configDraft = useMemo<CalcConfigFull>(() => {
     const defaults = getDefaultCalcConfigFull();
-
-    const energySaving = toNumber(glassEnergySavingCoeff);
-    const multiFunctional = toNumber(glassMultiFunctionalCoeff);
+    const normalizedGlassOptionCoefficients = Object.fromEntries(
+      Object.entries(glassOptionCoefficients).flatMap(([key, raw]) => {
+        const num = toNumber(raw);
+        return num == null ? [] : [[key, num]];
+      })
+    );
 
     const openingTurn = toNumber(feeOpeningTurn) ?? defaults.fees.openingSash.turn;
     const openingTilt = toNumber(feeOpeningTiltTurn) ?? defaults.fees.openingSash.tiltTurn;
@@ -264,18 +437,19 @@ export default function CalcSettingsPage(): JSX.Element {
       baseRates,
       coefficients: {
         material: coeffMaterial,
+        profileModel: coeffProfileModel,
         profileSeries: coeffProfileSeries,
         profileDepthMm: coeffProfileDepthMm,
         glazing: coeffGlazing,
         lamination: coeffLamination,
         laminationSide: coeffLaminationSide,
         laminationGroup: coeffLaminationGroup,
-        glassOptions: {
-          ...(energySaving == null ? {} : { energySaving }),
-          ...(multiFunctional == null ? {} : { multiFunctional }),
-        },
+        laminationColor: coeffLaminationColor,
+        glassOptions: normalizedGlassOptionCoefficients,
         door: {
           fillType: coeffDoorFillType,
+          fillTop: coeffDoorFillTop,
+          fillBottom: coeffDoorFillBottom,
         },
       },
       options: combinedOptions,
@@ -297,6 +471,40 @@ export default function CalcSettingsPage(): JSX.Element {
         },
       },
       roundingRules: { step: safeStep },
+      uiCatalog: {
+        profileModels: profileModels.map((item) => ({
+          key: item.key.trim(),
+          label: item.label.trim(),
+          brand: item.brand.trim(),
+          depthMm: toInt(item.depthMm) ?? undefined,
+          chambers: toInt(item.chambers) ?? undefined,
+          thermalCoefficient: item.thermalCoefficient.trim() || undefined,
+          description: item.description.trim() || undefined,
+          legacySeries:
+            item.legacySeries.trim() === "bautex" ||
+            item.legacySeries.trim() === "kbe" ||
+            item.legacySeries.trim() === "rehau" ||
+            item.legacySeries.trim() === "kommerling"
+              ? (item.legacySeries.trim() as CalcConfigFull["uiCatalog"]["profileModels"][number]["legacySeries"])
+              : undefined,
+          legacyDepthMm: toInt(item.legacyDepthMm) ?? undefined,
+          enabled: Boolean(item.enabled),
+        })),
+        glassOptions: glassOptionCatalog
+          .filter((item) => ALLOWED_GLASS_OPTION_KEYS.has(item.key.trim()))
+          .map((item) => ({
+            key: item.key.trim(),
+            label: item.label.trim(),
+            description: item.description.trim() || undefined,
+            enabled: Boolean(item.enabled),
+          })),
+        hardwareOptions: hardwareOptions.map((opt) => ({
+          key: opt.key.trim(),
+          label: opt.label.trim(),
+          description: opt.description.trim() || undefined,
+          enabled: Boolean(opt.enabled),
+        })),
+      },
       windowGeometry: {
         Fw_mm: Math.max(0, fw),
         Fh_mm: Math.max(0, fh),
@@ -312,12 +520,16 @@ export default function CalcSettingsPage(): JSX.Element {
     };
   }, [
     baseRates,
+    coeffDoorFillBottom,
     coeffDoorFillType,
+    coeffDoorFillTop,
     coeffGlazing,
     coeffLamination,
+    coeffLaminationColor,
     coeffLaminationSide,
     coeffLaminationGroup,
     coeffMaterial,
+    coeffProfileModel,
     coeffProfileDepthMm,
     coeffProfileSeries,
     feeDeliveryBase,
@@ -329,8 +541,8 @@ export default function CalcSettingsPage(): JSX.Element {
     feeMullionPerM,
     feeOpeningTiltTurn,
     feeOpeningTurn,
-    glassEnergySavingCoeff,
-    glassMultiFunctionalCoeff,
+    glassOptionCatalog,
+    glassOptionCoefficients,
     geomFhMm,
     geomFwMm,
     geomGlassInsetH,
@@ -341,8 +553,10 @@ export default function CalcSettingsPage(): JSX.Element {
     geomMinSashH,
     geomMinSashW,
     geomMwMm,
+    hardwareOptions,
     optionsFlat,
     optionsPerM2,
+    profileModels,
     roundingStep,
   ]);
 
@@ -370,10 +584,9 @@ export default function CalcSettingsPage(): JSX.Element {
       else if (num < 0) errs.push(`${label}: должно быть >= 0.`);
     }
 
-    const coeffFields: Array<[string, string]> = [
-      ["coefficients.glassOptions.energySaving", glassEnergySavingCoeff],
-      ["coefficients.glassOptions.multiFunctional", glassMultiFunctionalCoeff],
-    ];
+    const coeffFields = Object.entries(glassOptionCoefficients).map(
+      ([key, raw]) => [`coefficients.glassOptions.${key}`, raw] as const
+    );
 
     for (const [label, raw] of coeffFields) {
       if (!raw.trim()) continue;
@@ -411,6 +624,33 @@ export default function CalcSettingsPage(): JSX.Element {
     }
 
     const keyPattern = /^[a-z0-9_]+$/;
+    const seenProfileKeys = new Set<string>();
+    profileModels.forEach((item, idx) => {
+      const key = item.key.trim().toLowerCase();
+      const label = item.label.trim();
+      if (!key) errs.push(`Модель профиля #${idx + 1}: key обязателен.`);
+      else {
+        if (!keyPattern.test(key)) errs.push(`Модель профиля "${item.key}": key должен быть в формате a-z, 0-9, _.`);
+        if (seenProfileKeys.has(key)) errs.push(`Модель профиля: key "${item.key}" дублируется.`);
+        seenProfileKeys.add(key);
+      }
+      if (!label) errs.push(`Модель профиля "${item.key || `#${idx + 1}`}": label обязателен.`);
+    });
+
+    const seenGlassKeys = new Set<string>();
+    glassOptionCatalog.forEach((item, idx) => {
+      const key = item.key.trim();
+      const label = item.label.trim();
+      if (!key) errs.push(`Опция стекла #${idx + 1}: key обязателен.`);
+      else {
+        const normalized = key.toLowerCase();
+        if (!keyPattern.test(normalized)) errs.push(`Опция стекла "${key}": key должен быть в формате a-z, 0-9, _.`);
+        if (seenGlassKeys.has(normalized)) errs.push(`Опция стекла: key "${key}" дублируется.`);
+        seenGlassKeys.add(normalized);
+      }
+      if (!label) errs.push(`Опция стекла "${key || `#${idx + 1}`}": label обязателен.`);
+    });
+
     const seenHardwareKeys = new Set<string>();
     hardwareOptions.forEach((opt, idx) => {
       const key = opt.key.trim();
@@ -445,8 +685,8 @@ export default function CalcSettingsPage(): JSX.Element {
     feeMullionPerM,
     feeOpeningTiltTurn,
     feeOpeningTurn,
-    glassEnergySavingCoeff,
-    glassMultiFunctionalCoeff,
+    glassOptionCatalog,
+    glassOptionCoefficients,
     geomFhMm,
     geomFwMm,
     geomGlassInsetH,
@@ -458,6 +698,7 @@ export default function CalcSettingsPage(): JSX.Element {
     geomMinSashW,
     geomMwMm,
     hardwareOptions,
+    profileModels,
     roundingStep,
   ]);
 
@@ -476,23 +717,8 @@ export default function CalcSettingsPage(): JSX.Element {
     setSaving(true);
     setSavingError(null);
     try {
-      const uiCatalogPrev = isRecord(extras.uiCatalog) ? extras.uiCatalog : {};
-      const uiCatalogNext = {
-        ...uiCatalogPrev,
-        hardwareOptions: hardwareOptions.map((opt) => ({
-          key: opt.key.trim(),
-          label: opt.label.trim(),
-          enabled: Boolean(opt.enabled),
-        })),
-      };
-
-      const extrasNext: Record<string, unknown> = {
-        ...extras,
-        uiCatalog: uiCatalogNext,
-      };
-
       const payload: Record<string, unknown> = {
-        ...extrasNext,
+        ...extras,
         ...configDraft,
         updatedAt: serverTimestamp(),
         updatedBy: session.user?.email ?? null,
@@ -521,53 +747,43 @@ export default function CalcSettingsPage(): JSX.Element {
       subtitle={session.user?.email ?? ""}
       rightActions={
         <>
-          <button type="button" onClick={() => void onSave()} disabled={saving || loading || hasErrors}>
+          <Button type="button" onClick={() => void onSave()} disabled={saving || loading || hasErrors}>
             {saving ? "Сохранение..." : "Сохранить"}
-          </button>
-          <button className="secondary" onClick={() => void load()} disabled={loading}>
-            {loading ? "Загрузка..." : "Обновить"}
-          </button>
-          <button onClick={() => void signOut(auth!)} disabled={!auth}>
-            Выйти
-          </button>
+          </Button>
         </>
       }
     >
-
-      {loadError ? (
-        <section className="card noticeCard noticeCard-error">
-          <h3 style={{ marginBottom: 6 }}>Ошибка загрузки</h3>
-          <small className="noticeText-danger">{loadError}</small>
-        </section>
-      ) : null}
+      {loadError ? <PageAlert title="Ошибка загрузки" description={loadError} /> : null}
 
       {warnings.length ? (
-        <section className="card noticeCard noticeCard-warning">
-          <h3 style={{ marginBottom: 6 }} className="noticeText-warning">Предупреждения</h3>
-          <small className="noticeText-warning">
-            В документе есть значения, которые выглядят некорректно. Я их пропустил/привёл к дефолтам:
-          </small>
-          <div style={{ display: "grid", gap: 4, marginTop: 10 }}>
-            {warnings.slice(0, 10).map((msg) => (
-              <small key={msg} className="noticeText-warning">
-                • {msg}
-              </small>
-            ))}
-            {warnings.length > 10 ? (
-              <small className="noticeText-warning">…и ещё {warnings.length - 10}</small>
-            ) : null}
-          </div>
-        </section>
+        <PageAlert
+          title="Предупреждения"
+          description={
+            <div className="grid gap-2">
+              <div>В документе есть значения, которые выглядят некорректно. Они были пропущены или приведены к дефолтам:</div>
+              {warnings.slice(0, 10).map((msg) => (
+                <div key={msg}>• {msg}</div>
+              ))}
+              {warnings.length > 10 ? <div>…и ещё {warnings.length - 10}</div> : null}
+            </div>
+          }
+          variant="warning"
+        />
       ) : null}
 
-      {savingError ? <div className="errorBox">{savingError}</div> : null}
+      {savingError ? <PageAlert title="Ошибка сохранения" description={savingError} /> : null}
 
       {leafErrors.length ? (
-        <div className="errorBox">
-          {leafErrors.map((msg) => (
-            <div key={msg}>{msg}</div>
-          ))}
-        </div>
+        <PageAlert
+          title="Проверьте обязательные поля"
+          description={
+            <div className="grid gap-1">
+              {leafErrors.map((msg) => (
+                <div key={msg}>{msg}</div>
+              ))}
+            </div>
+          }
+        />
       ) : null}
 
       <CollapsibleSection
@@ -600,8 +816,8 @@ export default function CalcSettingsPage(): JSX.Element {
         subtitle="coefficients — множители (1 = без изменений)"
         defaultOpen={false}
       >
-        <div className="grid cols-2">
-          <section className="card">
+        <div className="grid gap-4 xl:grid-cols-2">
+          <SectionCard title="Материал">
             <KeyNumberTable
               title="Материал"
               value={coeffMaterial}
@@ -615,9 +831,9 @@ export default function CalcSettingsPage(): JSX.Element {
                 setTableErrors((prev) => ({ ...prev, coefficients_material: meta.errors }));
               }}
             />
-          </section>
+          </SectionCard>
 
-          <section className="card">
+          <SectionCard title="Серия профиля">
             <KeyNumberTable
               title="Серия профиля"
               value={coeffProfileSeries}
@@ -632,9 +848,27 @@ export default function CalcSettingsPage(): JSX.Element {
                 setTableErrors((prev) => ({ ...prev, coefficients_profileSeries: meta.errors }));
               }}
             />
-          </section>
+          </SectionCard>
 
-          <section className="card">
+          <SectionCard title="Модель профиля">
+            <KeyNumberTable
+              title="Модель профиля"
+              subtitle="Точный множитель по выбранной модели. Если profileModel задан, он используется вместо серии и глубины."
+              value={coeffProfileModel}
+              resetKey={resetKey}
+              normalizeKey={(key) => key.trim().toLowerCase()}
+              lockedKeys={Object.keys(PROFILE_MODEL_LABELS)}
+              knownLabels={PROFILE_MODEL_LABELS}
+              keyPlaceholder="например: kbe_expert_70"
+              valuePlaceholder="например: 1.08"
+              onChange={(next, meta) => {
+                setCoeffProfileModel(next);
+                setTableErrors((prev) => ({ ...prev, coefficients_profileModel: meta.errors }));
+              }}
+            />
+          </SectionCard>
+
+          <SectionCard title="Глубина профиля">
             <KeyNumberTable
               title="Глубина профиля (мм)"
               subtitle="Ключ — число строкой: 60, 70, 80…"
@@ -650,9 +884,9 @@ export default function CalcSettingsPage(): JSX.Element {
                 setTableErrors((prev) => ({ ...prev, coefficients_profileDepthMm: meta.errors }));
               }}
             />
-          </section>
+          </SectionCard>
 
-          <section className="card">
+          <SectionCard title="Стеклопакет">
             <KeyNumberTable
               title="Стеклопакет"
               value={coeffGlazing}
@@ -667,9 +901,9 @@ export default function CalcSettingsPage(): JSX.Element {
                 setTableErrors((prev) => ({ ...prev, coefficients_glazing: meta.errors }));
               }}
             />
-          </section>
+          </SectionCard>
 
-          <section className="card">
+          <SectionCard title="Ламинация">
             <KeyNumberTable
               title="Ламинация"
               value={coeffLamination}
@@ -684,9 +918,9 @@ export default function CalcSettingsPage(): JSX.Element {
                 setTableErrors((prev) => ({ ...prev, coefficients_lamination: meta.errors }));
               }}
             />
-          </section>
+          </SectionCard>
 
-          <section className="card">
+          <SectionCard title="Сторона ламинации">
             <KeyNumberTable
               title="Сторона ламинации"
               subtitle="Применяется только если lamination == oneSide"
@@ -702,9 +936,9 @@ export default function CalcSettingsPage(): JSX.Element {
                 setTableErrors((prev) => ({ ...prev, coefficients_laminationSide: meta.errors }));
               }}
             />
-          </section>
+          </SectionCard>
 
-          <section className="card">
+          <SectionCard title="Группа ламинации">
             <KeyNumberTable
               title="Группа ламинации"
               subtitle="Применяется только если lamination != none"
@@ -720,34 +954,46 @@ export default function CalcSettingsPage(): JSX.Element {
                 setTableErrors((prev) => ({ ...prev, coefficients_laminationGroup: meta.errors }));
               }}
             />
-          </section>
+          </SectionCard>
 
-          <section className="card" style={{ gridColumn: "1 / -1" }}>
-            <h3>Опции стекла</h3>
-            <small>Если поле пустое — коэффициент считается равным 1.</small>
-            <div className="grid cols-2" style={{ gap: 12, marginTop: 12 }}>
-              <label className="field">
-                <span className="fieldLabel">Energy saving</span>
-                <input
-                  value={glassEnergySavingCoeff}
-                  onChange={(e) => setGlassEnergySavingCoeff(e.target.value)}
-                  placeholder="1"
-                  inputMode="decimal"
-                />
-              </label>
-              <label className="field">
-                <span className="fieldLabel">Multi functional</span>
-                <input
-                  value={glassMultiFunctionalCoeff}
-                  onChange={(e) => setGlassMultiFunctionalCoeff(e.target.value)}
-                  placeholder="1"
-                  inputMode="decimal"
-                />
-              </label>
+          <SectionCard title="Цвет ламинации">
+            <KeyNumberTable
+              title="Цвет ламинации"
+              subtitle="Тонкая надбавка поверх группы/стороны ламинации"
+              value={coeffLaminationColor}
+              resetKey={resetKey}
+              normalizeKey={(key) => key.trim().toLowerCase()}
+              lockedKeys={Object.keys(LAMINATION_COLOR_LABELS)}
+              knownLabels={LAMINATION_COLOR_LABELS}
+              keyPlaceholder="например: gold_oak"
+              valuePlaceholder="например: 1.03"
+              onChange={(next, meta) => {
+                setCoeffLaminationColor(next);
+                setTableErrors((prev) => ({ ...prev, coefficients_laminationColor: meta.errors }));
+              }}
+            />
+          </SectionCard>
+
+          <SectionCard
+            title="Опции стекла"
+            description="Если поле пустое, коэффициент считается равным 1."
+            className="xl:col-span-2"
+          >
+            <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+              {Object.entries(GLASS_OPTION_LABELS).map(([key, label]) => (
+                <FieldBlock key={key} label={label}>
+                  <Input
+                    value={glassOptionCoefficients[key] ?? ""}
+                    onChange={(e) => setGlassOptionCoefficients((prev) => ({ ...prev, [key]: e.target.value }))}
+                    placeholder="1"
+                    inputMode="decimal"
+                  />
+                </FieldBlock>
+              ))}
             </div>
-          </section>
+          </SectionCard>
 
-          <section className="card">
+          <SectionCard title="Дверь: заполнение">
             <KeyNumberTable
               title="Дверь: заполнение"
               value={coeffDoorFillType}
@@ -762,8 +1008,43 @@ export default function CalcSettingsPage(): JSX.Element {
                 setTableErrors((prev) => ({ ...prev, coefficients_door_fillType: meta.errors }));
               }}
             />
-          </section>
+          </SectionCard>
 
+          <SectionCard title="Дверь: верх двери">
+            <KeyNumberTable
+              title="Дверь: верх двери"
+              subtitle="Если задано, имеет приоритет над fillType для верхней части"
+              value={coeffDoorFillTop}
+              resetKey={resetKey}
+              normalizeKey={(key) => key.trim().toLowerCase()}
+              lockedKeys={Object.keys(ENTRANCE_FILL_LABELS)}
+              knownLabels={ENTRANCE_FILL_LABELS}
+              keyPlaceholder="например: glass"
+              valuePlaceholder="например: 1.04"
+              onChange={(next, meta) => {
+                setCoeffDoorFillTop(next);
+                setTableErrors((prev) => ({ ...prev, coefficients_door_fillTop: meta.errors }));
+              }}
+            />
+          </SectionCard>
+
+          <SectionCard title="Дверь: низ двери">
+            <KeyNumberTable
+              title="Дверь: низ двери"
+              subtitle="Если задано, имеет приоритет над fillType для нижней части"
+              value={coeffDoorFillBottom}
+              resetKey={resetKey}
+              normalizeKey={(key) => key.trim().toLowerCase()}
+              lockedKeys={Object.keys(ENTRANCE_FILL_LABELS)}
+              knownLabels={ENTRANCE_FILL_LABELS}
+              keyPlaceholder="например: sandwich"
+              valuePlaceholder="например: 0.97"
+              onChange={(next, meta) => {
+                setCoeffDoorFillBottom(next);
+                setTableErrors((prev) => ({ ...prev, coefficients_door_fillBottom: meta.errors }));
+              }}
+            />
+          </SectionCard>
         </div>
       </CollapsibleSection>
 
@@ -773,8 +1054,8 @@ export default function CalcSettingsPage(): JSX.Element {
         subtitle="options — доплаты за комплектующие (flat) и/или за м² (perM2)"
         defaultOpen={false}
       >
-        <div className="grid cols-2" style={{ gap: 12 }}>
-          <section className="card">
+        <div className="grid gap-4 xl:grid-cols-2">
+          <SectionCard title="Комплектующие: flat">
             <KeyNumberTable
               title="Комплектующие: flat"
               subtitle="Фиксированная доплата. Ключи должны совпадать с приложением (например: mosquito_net)."
@@ -790,9 +1071,9 @@ export default function CalcSettingsPage(): JSX.Element {
                 setTableErrors((prev) => ({ ...prev, options_flat: meta.errors }));
               }}
             />
-          </section>
+          </SectionCard>
 
-          <section className="card">
+          <SectionCard title="Комплектующие: perM2">
             <KeyNumberTable
               title="Комплектующие: perM2"
               subtitle="Доплата за м² (для стекла считается от суммарной площади стекла по секциям)."
@@ -808,7 +1089,7 @@ export default function CalcSettingsPage(): JSX.Element {
                 setTableErrors((prev) => ({ ...prev, options_perM2: meta.errors }));
               }}
             />
-          </section>
+          </SectionCard>
         </div>
       </CollapsibleSection>
 
@@ -818,63 +1099,263 @@ export default function CalcSettingsPage(): JSX.Element {
         subtitle="windowGeometry — вычеты рамы/импоста и ограничения (мм)"
         defaultOpen={false}
       >
-        <section className="card" style={{ display: "grid", gap: 12 }}>
-          <h3>Вычеты (takeoffs)</h3>
-          <div className="grid cols-3" style={{ gap: 12 }}>
-            <label className="field">
-              <span className="fieldLabel">Fw_mm (рама слева/справа)</span>
-              <input value={geomFwMm} onChange={(e) => setGeomFwMm(e.target.value)} inputMode="decimal" />
-            </label>
-            <label className="field">
-              <span className="fieldLabel">Fh_mm (рама сверху/снизу)</span>
-              <input value={geomFhMm} onChange={(e) => setGeomFhMm(e.target.value)} inputMode="decimal" />
-            </label>
-            <label className="field">
-              <span className="fieldLabel">Mw_mm (верт. импост)</span>
-              <input value={geomMwMm} onChange={(e) => setGeomMwMm(e.target.value)} inputMode="decimal" />
-            </label>
-          </div>
-        </section>
+        <div className="grid gap-4 xl:grid-cols-3">
+          <SectionCard title="Вычеты (takeoffs)" className="xl:col-span-3">
+            <div className="grid gap-4 md:grid-cols-3">
+              <FieldBlock label="Fw_mm (рама слева/справа)">
+                <Input value={geomFwMm} onChange={(e) => setGeomFwMm(e.target.value)} inputMode="decimal" />
+              </FieldBlock>
+              <FieldBlock label="Fh_mm (рама сверху/снизу)">
+                <Input value={geomFhMm} onChange={(e) => setGeomFhMm(e.target.value)} inputMode="decimal" />
+              </FieldBlock>
+              <FieldBlock label="Mw_mm (верт. импост)">
+                <Input value={geomMwMm} onChange={(e) => setGeomMwMm(e.target.value)} inputMode="decimal" />
+              </FieldBlock>
+            </div>
+          </SectionCard>
 
-        <section className="card" style={{ display: "grid", gap: 12 }}>
-          <h3>Ограничения</h3>
-          <div className="grid cols-2" style={{ gap: 12 }}>
-            <label className="field">
-              <span className="fieldLabel">minSashW_mm</span>
-              <input value={geomMinSashW} onChange={(e) => setGeomMinSashW(e.target.value)} inputMode="decimal" />
-            </label>
-            <label className="field">
-              <span className="fieldLabel">maxSashW_mm (опц.)</span>
-              <input value={geomMaxSashW} onChange={(e) => setGeomMaxSashW(e.target.value)} inputMode="decimal" placeholder="пусто = нет" />
-            </label>
-            <label className="field">
-              <span className="fieldLabel">minSashH_mm</span>
-              <input value={geomMinSashH} onChange={(e) => setGeomMinSashH(e.target.value)} inputMode="decimal" />
-            </label>
-            <label className="field">
-              <span className="fieldLabel">maxSashH_mm (опц.)</span>
-              <input value={geomMaxSashH} onChange={(e) => setGeomMaxSashH(e.target.value)} inputMode="decimal" placeholder="пусто = нет" />
-            </label>
-            <label className="field">
-              <span className="fieldLabel">minFixedW_mm</span>
-              <input value={geomMinFixedW} onChange={(e) => setGeomMinFixedW(e.target.value)} inputMode="decimal" />
-            </label>
-          </div>
-        </section>
+          <SectionCard title="Ограничения" className="xl:col-span-2">
+            <div className="grid gap-4 md:grid-cols-2">
+              <FieldBlock label="minSashW_mm">
+                <Input value={geomMinSashW} onChange={(e) => setGeomMinSashW(e.target.value)} inputMode="decimal" />
+              </FieldBlock>
+              <FieldBlock label="maxSashW_mm (опц.)">
+                <Input value={geomMaxSashW} onChange={(e) => setGeomMaxSashW(e.target.value)} inputMode="decimal" placeholder="пусто = нет" />
+              </FieldBlock>
+              <FieldBlock label="minSashH_mm">
+                <Input value={geomMinSashH} onChange={(e) => setGeomMinSashH(e.target.value)} inputMode="decimal" />
+              </FieldBlock>
+              <FieldBlock label="maxSashH_mm (опц.)">
+                <Input value={geomMaxSashH} onChange={(e) => setGeomMaxSashH(e.target.value)} inputMode="decimal" placeholder="пусто = нет" />
+              </FieldBlock>
+              <FieldBlock label="minFixedW_mm">
+                <Input value={geomMinFixedW} onChange={(e) => setGeomMinFixedW(e.target.value)} inputMode="decimal" />
+              </FieldBlock>
+            </div>
+          </SectionCard>
 
-        <section className="card" style={{ display: "grid", gap: 12 }}>
-          <h3>Стекло (опционально)</h3>
-          <div className="grid cols-2" style={{ gap: 12 }}>
-            <label className="field">
-              <span className="fieldLabel">glassInsetW_mm</span>
-              <input value={geomGlassInsetW} onChange={(e) => setGeomGlassInsetW(e.target.value)} inputMode="decimal" />
-            </label>
-            <label className="field">
-              <span className="fieldLabel">glassInsetH_mm</span>
-              <input value={geomGlassInsetH} onChange={(e) => setGeomGlassInsetH(e.target.value)} inputMode="decimal" />
-            </label>
+          <SectionCard title="Стекло (опционально)">
+            <div className="grid gap-4">
+              <FieldBlock label="glassInsetW_mm">
+                <Input value={geomGlassInsetW} onChange={(e) => setGeomGlassInsetW(e.target.value)} inputMode="decimal" />
+              </FieldBlock>
+              <FieldBlock label="glassInsetH_mm">
+                <Input value={geomGlassInsetH} onChange={(e) => setGeomGlassInsetH(e.target.value)} inputMode="decimal" />
+              </FieldBlock>
+            </div>
+          </SectionCard>
+        </div>
+      </CollapsibleSection>
+
+      <CollapsibleSection
+        storageKey="admin:calc_settings:profile_catalog:v1"
+        title="Каталог: модели профилей"
+        subtitle="uiCatalog.profileModels — точные модели для калькулятора"
+        defaultOpen={false}
+      >
+        <SectionCard
+          title="Справочник профилей"
+          description="Модель задаёт витринное описание и точный ключ для коэффициента profileModel."
+        >
+          <div className="grid gap-4">
+            {profileModels.length ? (
+              profileModels.map((item, idx) => (
+                <div key={`profile-model-${idx}`} className="grid gap-4 rounded-2xl border border-border/70 bg-background/70 p-4 xl:grid-cols-[140px_minmax(0,1fr)_120px_100px_130px_180px_140px_120px_auto]">
+                  <SwitchField
+                    title="Включено"
+                    checked={item.enabled}
+                    onCheckedChange={(checked) =>
+                      setProfileModels((prev) => prev.map((row, i) => (i === idx ? { ...row, enabled: checked } : row)))
+                    }
+                    size="sm"
+                  />
+                  <FieldBlock label="Key">
+                    <Input
+                      value={item.key}
+                      onChange={(e) => setProfileModels((prev) => prev.map((row, i) => (i === idx ? { ...row, key: e.target.value } : row)))}
+                      placeholder="например: rehau_grazio"
+                    />
+                  </FieldBlock>
+                  <FieldBlock label="Название">
+                    <Input
+                      value={item.label}
+                      onChange={(e) => setProfileModels((prev) => prev.map((row, i) => (i === idx ? { ...row, label: e.target.value } : row)))}
+                      placeholder="например: Rehau Grazio"
+                    />
+                  </FieldBlock>
+                  <FieldBlock label="Бренд">
+                    <Input
+                      value={item.brand}
+                      onChange={(e) => setProfileModels((prev) => prev.map((row, i) => (i === idx ? { ...row, brand: e.target.value } : row)))}
+                      placeholder="Rehau"
+                    />
+                  </FieldBlock>
+                  <FieldBlock label="Глубина">
+                    <Input
+                      value={item.depthMm}
+                      onChange={(e) => setProfileModels((prev) => prev.map((row, i) => (i === idx ? { ...row, depthMm: e.target.value } : row)))}
+                      inputMode="numeric"
+                      placeholder="70"
+                    />
+                  </FieldBlock>
+                  <FieldBlock label="Камеры">
+                    <Input
+                      value={item.chambers}
+                      onChange={(e) => setProfileModels((prev) => prev.map((row, i) => (i === idx ? { ...row, chambers: e.target.value } : row)))}
+                      inputMode="numeric"
+                      placeholder="5"
+                    />
+                  </FieldBlock>
+                  <FieldBlock label="Коэф.">
+                    <Input
+                      value={item.thermalCoefficient}
+                      onChange={(e) =>
+                        setProfileModels((prev) => prev.map((row, i) => (i === idx ? { ...row, thermalCoefficient: e.target.value } : row)))
+                      }
+                      placeholder="0.83"
+                    />
+                  </FieldBlock>
+                  <FieldBlock label="Legacy series">
+                    <NativeSelect
+                      value={item.legacySeries || ""}
+                      onChange={(e) => setProfileModels((prev) => prev.map((row, i) => (i === idx ? { ...row, legacySeries: e.target.value } : row)))}
+                    >
+                      <option value="">-</option>
+                      {Object.entries(PROFILE_SERIES_LABELS).map(([key, label]) => (
+                        <option key={key} value={key}>
+                          {label}
+                        </option>
+                      ))}
+                    </NativeSelect>
+                  </FieldBlock>
+                  <FieldBlock label="Legacy depth">
+                    <Input
+                      value={item.legacyDepthMm}
+                      onChange={(e) =>
+                        setProfileModels((prev) => prev.map((row, i) => (i === idx ? { ...row, legacyDepthMm: e.target.value } : row)))
+                      }
+                      inputMode="numeric"
+                      placeholder="70"
+                    />
+                  </FieldBlock>
+                  <div className="flex items-end">
+                    <Button type="button" variant="outline" onClick={() => setProfileModels((prev) => prev.filter((_, i) => i !== idx))}>
+                      Удалить
+                    </Button>
+                  </div>
+                  <div className="xl:col-span-9">
+                    <FieldBlock label="Описание">
+                      <Input
+                        value={item.description}
+                        onChange={(e) => setProfileModels((prev) => prev.map((row, i) => (i === idx ? { ...row, description: e.target.value } : row)))}
+                        placeholder="Короткое описание для калькулятора"
+                      />
+                    </FieldBlock>
+                  </div>
+                </div>
+              ))
+            ) : (
+              <EmptyState title="Нет моделей" description="Добавьте первую модель профиля для калькулятора." />
+            )}
+
+            <div className="flex justify-start">
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() =>
+                  setProfileModels((prev) => [
+                    ...prev,
+                    {
+                      key: "",
+                      label: "",
+                      brand: "",
+                      depthMm: "",
+                      chambers: "",
+                      thermalCoefficient: "",
+                      description: "",
+                      legacySeries: "",
+                      legacyDepthMm: "",
+                      enabled: true,
+                    },
+                  ])
+                }
+              >
+                + Добавить модель
+              </Button>
+            </div>
           </div>
-        </section>
+        </SectionCard>
+      </CollapsibleSection>
+
+      <CollapsibleSection
+        storageKey="admin:calc_settings:glass_catalog:v1"
+        title="Каталог: опции стеклопакета"
+        subtitle="uiCatalog.glassOptions — переключатели в калькуляторе"
+        defaultOpen={false}
+      >
+        <SectionCard
+          title="Справочник опций стекла"
+          description="Текст из этого справочника используется в калькуляторе и подсказках."
+        >
+          <div className="grid gap-4">
+            {glassOptionCatalog.length ? (
+              glassOptionCatalog.map((item, idx) => (
+                <div key={`glass-option-${idx}`} className="grid gap-4 rounded-2xl border border-border/70 bg-background/70 p-4 md:grid-cols-[180px_minmax(0,1fr)_minmax(0,1fr)_auto]">
+                  <SwitchField
+                    title="Включено"
+                    checked={item.enabled}
+                    onCheckedChange={(checked) =>
+                      setGlassOptionCatalog((prev) => prev.map((row, i) => (i === idx ? { ...row, enabled: checked } : row)))
+                    }
+                    size="sm"
+                  />
+                  <FieldBlock label="Key">
+                    <Input
+                      value={item.key}
+                      onChange={(e) => setGlassOptionCatalog((prev) => prev.map((row, i) => (i === idx ? { ...row, key: e.target.value } : row)))}
+                      placeholder="например: energySaving"
+                    />
+                  </FieldBlock>
+                  <FieldBlock label="Название">
+                    <Input
+                      value={item.label}
+                      onChange={(e) => setGlassOptionCatalog((prev) => prev.map((row, i) => (i === idx ? { ...row, label: e.target.value } : row)))}
+                      placeholder="например: Энергосберегающий стеклопакет"
+                    />
+                  </FieldBlock>
+                  <div className="flex items-end">
+                    <Button type="button" variant="outline" onClick={() => setGlassOptionCatalog((prev) => prev.filter((_, i) => i !== idx))}>
+                      Удалить
+                    </Button>
+                  </div>
+                  <div className="md:col-span-4">
+                    <FieldBlock label="Описание">
+                      <Input
+                        value={item.description}
+                        onChange={(e) =>
+                          setGlassOptionCatalog((prev) => prev.map((row, i) => (i === idx ? { ...row, description: e.target.value } : row)))
+                        }
+                        placeholder="Короткое описание эффекта"
+                      />
+                    </FieldBlock>
+                  </div>
+                </div>
+              ))
+            ) : (
+              <EmptyState title="Нет опций" description="Добавьте первую опцию стеклопакета." />
+            )}
+
+            <div className="flex justify-start">
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => setGlassOptionCatalog((prev) => [...prev, { key: "", label: "", description: "", enabled: true }])}
+              >
+                + Добавить опцию
+              </Button>
+            </div>
+          </div>
+        </SectionCard>
       </CollapsibleSection>
 
       <CollapsibleSection
@@ -883,87 +1364,90 @@ export default function CalcSettingsPage(): JSX.Element {
         subtitle="uiCatalog.hardwareOptions — варианты выбора в калькуляторе (цена берётся из options по key)"
         defaultOpen={false}
       >
-        <section className="card" style={{ display: "grid", gap: 12 }}>
-          <small style={{ color: "var(--muted)" }}>
-            В приложении показываются только варианты с enabled=true. Чтобы вариант влиял на цену, добавьте его стоимость в разделе «Комплектующие»
-            с тем же key.
-          </small>
-
-          <div style={{ display: "grid", gap: 12 }}>
+        <SectionCard
+          title="Справочник фурнитуры"
+          description="В приложении показываются только варианты с `enabled=true`. Для влияния на цену добавьте стоимость с тем же key в разделе комплектующих."
+        >
+          <div className="grid gap-4">
             {hardwareOptions.length ? (
               hardwareOptions.map((opt, idx) => (
-                <div
-                  key={`hardware-${idx}`}
-                  style={{
-                    display: "grid",
-                    gridTemplateColumns: "140px minmax(0, 1fr) minmax(0, 1fr) auto",
-                    gap: 12,
-                    alignItems: "end"
-                  }}
-                >
-                  <label className="field" style={{ display: "flex", alignItems: "center", gap: 10, minHeight: 46 }}>
-                    <input
-                      type="checkbox"
-                      checked={opt.enabled}
-                      onChange={(e) =>
-                        setHardwareOptions((prev) =>
-                          prev.map((row, i) => (i === idx ? { ...row, enabled: e.target.checked } : row))
-                        )
-                      }
-                    />
-                    <span className="fieldLabel" style={{ margin: 0 }}>
-                      Включено
-                    </span>
-                  </label>
+                <div key={`hardware-${idx}`} className="grid gap-4 rounded-2xl border border-border/70 bg-background/70 p-4 md:grid-cols-[180px_minmax(0,1fr)_minmax(0,1fr)_180px_auto]">
+                  <SwitchField
+                    title="Включено"
+                    checked={opt.enabled}
+                    onCheckedChange={(checked) =>
+                      setHardwareOptions((prev) =>
+                        prev.map((row, i) => (i === idx ? { ...row, enabled: checked } : row))
+                      )
+                    }
+                    size="sm"
+                  />
 
-                  <label className="field">
-                    <span className="fieldLabel">Key</span>
-                    <input
+                  <FieldBlock label="Key">
+                    <Input
                       value={opt.key}
                       onChange={(e) =>
                         setHardwareOptions((prev) =>
                           prev.map((row, i) => (i === idx ? { ...row, key: e.target.value } : row))
                         )
                       }
-                      placeholder="например: hardware_standard"
+                      placeholder="например: titan_af"
                     />
-                  </label>
+                  </FieldBlock>
 
-                  <label className="field">
-                    <span className="fieldLabel">Название</span>
-                    <input
+                  <FieldBlock label="Название">
+                    <Input
                       value={opt.label}
                       onChange={(e) =>
                         setHardwareOptions((prev) =>
                           prev.map((row, i) => (i === idx ? { ...row, label: e.target.value } : row))
                         )
                       }
-                      placeholder="например: Стандарт"
+                      placeholder="например: Titan AF"
                     />
-                  </label>
+                  </FieldBlock>
 
-                  <button
-                    type="button"
-                    className="secondary"
-                    onClick={() => setHardwareOptions((prev) => prev.filter((_, i) => i !== idx))}
-                  >
-                    Удалить
-                  </button>
+                  <div className="flex items-end">
+                    <Button type="button" variant="outline" onClick={() => setHardwareOptions((prev) => prev.filter((_, i) => i !== idx))}>
+                      Удалить
+                    </Button>
+                  </div>
+
+                  <div className="md:col-span-4">
+                    <FieldBlock label="Описание">
+                      <Input
+                        value={opt.description}
+                        onChange={(e) =>
+                          setHardwareOptions((prev) =>
+                            prev.map((row, i) => (i === idx ? { ...row, description: e.target.value } : row))
+                          )
+                        }
+                        placeholder="Короткое описание для клиента"
+                      />
+                    </FieldBlock>
+                  </div>
                 </div>
               ))
             ) : (
-              <small style={{ color: "var(--muted)" }}>Нет вариантов. Добавьте первый вариант.</small>
+              <EmptyState title="Нет вариантов" description="Добавьте первый вариант фурнитуры для калькулятора." />
             )}
 
-            <button
-              type="button"
-              className="secondary"
-              onClick={() => setHardwareOptions((prev) => [...prev, { key: "", label: "", enabled: true }])}
-            >
-              + Добавить вариант
-            </button>
+            <div className="flex justify-start">
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() =>
+                  setHardwareOptions((prev) => [
+                    ...prev,
+                    { key: "", label: "", description: "", enabled: true },
+                  ])
+                }
+              >
+                + Добавить вариант
+              </Button>
+            </div>
           </div>
-        </section>
+        </SectionCard>
       </CollapsibleSection>
 
       <CollapsibleSection
@@ -972,65 +1456,54 @@ export default function CalcSettingsPage(): JSX.Element {
         subtitle="fees — доплаты за створки, монтаж, доставку"
         defaultOpen={false}
       >
-        <section className="card" style={{ display: "grid", gap: 12 }}>
-          <h3>Створки</h3>
-          <div className="grid cols-2" style={{ gap: 12 }}>
-            <label className="field">
-              <span className="fieldLabel">Поворотная створка (turn)</span>
-              <input value={feeOpeningTurn} onChange={(e) => setFeeOpeningTurn(e.target.value)} inputMode="decimal" />
-            </label>
-            <label className="field">
-              <span className="fieldLabel">Повор.-откидная (tiltTurn)</span>
-              <input value={feeOpeningTiltTurn} onChange={(e) => setFeeOpeningTiltTurn(e.target.value)} inputMode="decimal" />
-            </label>
-          </div>
-        </section>
+        <div className="grid gap-4 xl:grid-cols-2">
+          <SectionCard title="Створки">
+            <div className="grid gap-4 md:grid-cols-2">
+              <FieldBlock label="Поворотная створка (turn)">
+                <Input value={feeOpeningTurn} onChange={(e) => setFeeOpeningTurn(e.target.value)} inputMode="decimal" />
+              </FieldBlock>
+              <FieldBlock label="Повор.-откидная (tiltTurn)">
+                <Input value={feeOpeningTiltTurn} onChange={(e) => setFeeOpeningTiltTurn(e.target.value)} inputMode="decimal" />
+              </FieldBlock>
+            </div>
+          </SectionCard>
 
-        <section className="card" style={{ display: "grid", gap: 12 }}>
-          <h3>Окна</h3>
-          <div className="grid cols-2" style={{ gap: 12 }}>
-            <label className="field">
-              <span className="fieldLabel">Meeting pair kit (fees.meetingPairKit)</span>
-              <input value={feeMeetingPairKit} onChange={(e) => setFeeMeetingPairKit(e.target.value)} inputMode="decimal" />
-            </label>
-            <label className="field">
-              <span className="fieldLabel">Импост за метр (fees.mullionPerM)</span>
-              <input value={feeMullionPerM} onChange={(e) => setFeeMullionPerM(e.target.value)} inputMode="decimal" />
-            </label>
-          </div>
-        </section>
+          <SectionCard title="Окна">
+            <div className="grid gap-4 md:grid-cols-2">
+              <FieldBlock label="Meeting pair kit (fees.meetingPairKit)">
+                <Input value={feeMeetingPairKit} onChange={(e) => setFeeMeetingPairKit(e.target.value)} inputMode="decimal" />
+              </FieldBlock>
+              <FieldBlock label="Импост за метр (fees.mullionPerM)">
+                <Input value={feeMullionPerM} onChange={(e) => setFeeMullionPerM(e.target.value)} inputMode="decimal" />
+              </FieldBlock>
+            </div>
+          </SectionCard>
 
-        <section className="card" style={{ display: "grid", gap: 12 }}>
-          <h3>Монтаж</h3>
-          <div className="grid cols-2" style={{ gap: 12 }}>
-            <label className="field">
-              <span className="fieldLabel">За м² (perM2)</span>
-              <input value={feeInstallPerM2} onChange={(e) => setFeeInstallPerM2(e.target.value)} inputMode="decimal" />
-            </label>
-            <label className="field">
-              <span className="fieldLabel">За створку (perSash)</span>
-              <input value={feeInstallPerSash} onChange={(e) => setFeeInstallPerSash(e.target.value)} inputMode="decimal" />
-            </label>
-          </div>
-        </section>
+          <SectionCard title="Монтаж">
+            <div className="grid gap-4 md:grid-cols-2">
+              <FieldBlock label="За м² (perM2)">
+                <Input value={feeInstallPerM2} onChange={(e) => setFeeInstallPerM2(e.target.value)} inputMode="decimal" />
+              </FieldBlock>
+              <FieldBlock label="За створку (perSash)">
+                <Input value={feeInstallPerSash} onChange={(e) => setFeeInstallPerSash(e.target.value)} inputMode="decimal" />
+              </FieldBlock>
+            </div>
+          </SectionCard>
 
-        <section className="card" style={{ display: "grid", gap: 12 }}>
-          <h3>Доставка</h3>
-          <div className="grid cols-2" style={{ gap: 12 }}>
-            <label className="field">
-              <span className="fieldLabel">База (base)</span>
-              <input value={feeDeliveryBase} onChange={(e) => setFeeDeliveryBase(e.target.value)} inputMode="decimal" />
-            </label>
-            <label className="field">
-              <span className="fieldLabel">Бесплатно км (freeKm)</span>
-              <input value={feeDeliveryFreeKm} onChange={(e) => setFeeDeliveryFreeKm(e.target.value)} inputMode="decimal" />
-            </label>
-            <label className="field">
-              <span className="fieldLabel">За км (perKm)</span>
-              <input value={feeDeliveryPerKm} onChange={(e) => setFeeDeliveryPerKm(e.target.value)} inputMode="decimal" />
-            </label>
-          </div>
-        </section>
+          <SectionCard title="Доставка">
+            <div className="grid gap-4 md:grid-cols-2">
+              <FieldBlock label="База (base)">
+                <Input value={feeDeliveryBase} onChange={(e) => setFeeDeliveryBase(e.target.value)} inputMode="decimal" />
+              </FieldBlock>
+              <FieldBlock label="Бесплатно км (freeKm)">
+                <Input value={feeDeliveryFreeKm} onChange={(e) => setFeeDeliveryFreeKm(e.target.value)} inputMode="decimal" />
+              </FieldBlock>
+              <FieldBlock label="За км (perKm)">
+                <Input value={feeDeliveryPerKm} onChange={(e) => setFeeDeliveryPerKm(e.target.value)} inputMode="decimal" />
+              </FieldBlock>
+            </div>
+          </SectionCard>
+        </div>
       </CollapsibleSection>
 
       <CollapsibleSection
@@ -1039,13 +1512,11 @@ export default function CalcSettingsPage(): JSX.Element {
         subtitle="roundingRules.step — шаг округления итоговой суммы"
         defaultOpen={false}
       >
-        <section className="card" style={{ display: "grid", gap: 12 }}>
-          <h3>Шаг</h3>
-          <label className="field">
-            <span className="fieldLabel">step</span>
-            <input value={roundingStep} onChange={(e) => setRoundingStep(e.target.value)} inputMode="numeric" />
-          </label>
-        </section>
+        <SectionCard title="Шаг">
+          <FieldBlock label="step">
+            <Input value={roundingStep} onChange={(e) => setRoundingStep(e.target.value)} inputMode="numeric" />
+          </FieldBlock>
+        </SectionCard>
       </CollapsibleSection>
 
       <CollapsibleSection
@@ -1064,33 +1535,28 @@ export default function CalcSettingsPage(): JSX.Element {
           subtitle="Эти поля не относятся к настройкам калькулятора и сохраняются как есть"
           defaultOpen={false}
         >
-          <section className="card" style={{ display: "grid", gap: 12 }}>
-            <h3>extras</h3>
-            <div className="tableWrap">
-              <table>
-                <thead>
-                  <tr>
-                    <th style={{ width: "34%" }}>Ключ</th>
-                    <th>Значение</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {Object.entries(extras)
-                    .sort(([a], [b]) => a.localeCompare(b))
-                    .map(([key, value]) => (
-                      <tr key={key}>
-                        <td>
-                          <b>{key}</b>
-                        </td>
-                        <td>
-                          <small className="breakLong">{JSON.stringify(value)}</small>
-                        </td>
-                      </tr>
-                    ))}
-                </tbody>
-              </table>
-            </div>
-          </section>
+          <SectionCard title="extras">
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead className="w-[34%]">Ключ</TableHead>
+                  <TableHead>Значение</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {Object.entries(extras)
+                  .sort(([a], [b]) => a.localeCompare(b))
+                  .map(([key, value]) => (
+                    <TableRow key={key}>
+                      <TableCell className="font-medium">{key}</TableCell>
+                      <TableCell>
+                        <div className="break-all text-sm text-muted-foreground">{JSON.stringify(value)}</div>
+                      </TableCell>
+                    </TableRow>
+                  ))}
+              </TableBody>
+            </Table>
+          </SectionCard>
         </CollapsibleSection>
       ) : null}
 
@@ -1114,15 +1580,19 @@ function CalcPreview({ config }: { config: CalcConfigFull }): JSX.Element {
   const [profileDepthMm, setProfileDepthMm] = useState("70");
   const [glazing, setGlazing] = useState<keyof typeof GLAZING_LABELS>("double");
   const [designOption, setDesignOption] = useState<DesignOption>("none");
+  const [laminationColor, setLaminationColor] = useState<keyof typeof LAMINATION_COLOR_LABELS>("gold_oak");
   const lamination = designOption === "none" ? "none" : designOption === "outside" || designOption === "inside" ? "oneSide" : "twoSide";
   const laminationSide = designOption === "inside" ? "inside" : designOption === "outside" ? "outside" : undefined;
   const laminationGroup = designOption === "twoSideColor" ? "color" : designOption === "twoSideWhite" ? "white" : undefined;
   const [fillType, setFillType] = useState<keyof typeof ENTRANCE_FILL_LABELS>("glass");
+  const [fillTop, setFillTop] = useState<keyof typeof ENTRANCE_FILL_LABELS>("glass");
+  const [fillBottom, setFillBottom] = useState<keyof typeof ENTRANCE_FILL_LABELS>("glass");
+  const [hardwareKey, setHardwareKey] = useState("");
 
   const [energySaving, setEnergySaving] = useState(false);
   const [multiFunctional, setMultiFunctional] = useState(false);
 
-  const [installEnabled, setInstallEnabled] = useState(false);
+  const [installEnabled, setInstallEnabled] = useState(true);
   const [deliveryEnabled, setDeliveryEnabled] = useState(false);
   const [deliveryKm, setDeliveryKm] = useState("0");
 
@@ -1143,6 +1613,26 @@ function CalcPreview({ config }: { config: CalcConfigFull }): JSX.Element {
       setMeetingPairNoMullion(false);
     }
   }, [meetingPairEligible, meetingPairNoMullion]);
+
+  const hardwareCatalog = useMemo(
+    () =>
+      (config.uiCatalog?.hardwareOptions ?? [])
+        .filter((item: CalcConfigFull["uiCatalog"]["hardwareOptions"][number]) => item?.enabled !== false && typeof item?.key === "string" && item.key.trim())
+        .map((item: CalcConfigFull["uiCatalog"]["hardwareOptions"][number]) => ({
+          key: String(item?.key).trim().toLowerCase(),
+          label: typeof item?.label === "string" && item.label.trim() ? item.label.trim() : String(item?.key).trim(),
+        })),
+    [config.uiCatalog?.hardwareOptions]
+  );
+
+  useEffect(() => {
+    if (!hardwareCatalog.length) {
+      if (hardwareKey) setHardwareKey("");
+      return;
+    }
+    if (hardwareKey && hardwareCatalog.some((item) => item.key === hardwareKey)) return;
+    setHardwareKey(hardwareCatalog[0]?.key ?? "");
+  }, [hardwareCatalog, hardwareKey]);
 
   const previewInput = useMemo<CalcInput>(() => {
     const width = toNumber(widthCm) ?? 0;
@@ -1181,8 +1671,14 @@ function CalcPreview({ config }: { config: CalcConfigFull }): JSX.Element {
       lamination,
       laminationGroup,
       laminationSide,
+      laminationColor: lamination === "none" ? undefined : laminationColor,
 
-      entranceOptions: isEntranceLike ? { fillType } : undefined,
+      entranceOptions: isEntranceLike ? { fillType, fillTop, fillBottom } : undefined,
+      hardwareKey: productType === "door" && hardwareKey ? hardwareKey : undefined,
+      hardwareLabel:
+        productType === "door" && hardwareKey
+          ? hardwareCatalog.find((item) => item.key === hardwareKey)?.label ?? undefined
+          : undefined,
 
       services: {
         installEnabled,
@@ -1197,10 +1693,15 @@ function CalcPreview({ config }: { config: CalcConfigFull }): JSX.Element {
     deliveryKm,
     doorSubtype,
     energySaving,
+    fillBottom,
     fillType,
+    fillTop,
     glazing,
+    hardwareCatalog,
+    hardwareKey,
     heightCm,
     installEnabled,
+    laminationColor,
     designOption,
     multiFunctional,
     openingSashes,
@@ -1223,264 +1724,305 @@ function CalcPreview({ config }: { config: CalcConfigFull }): JSX.Element {
   }, [config, previewInput]);
 
   return (
-    <section className="card" style={{ display: "grid", gap: 12 }}>
-      <h3>Превью</h3>
+    <div className="grid gap-4">
+      <SectionCard title="Параметры изделия" description="Мини-симулятор расчёта на основе текущего config draft.">
+        <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+          <NumberStepperField label="Ширина (см)" value={widthCm} onChange={setWidthCm} inputMode="decimal" min={20} step={5} />
+          <NumberStepperField label="Высота (см)" value={heightCm} onChange={setHeightCm} inputMode="decimal" min={20} step={5} />
+          <NumberStepperField label="Количество" value={quantity} onChange={setQuantity} min={1} step={1} />
+          <FieldBlock label="Тип">
+            <ModeToggleGroup<"window" | "door">
+              value={productType}
+              onChange={setProductType}
+              options={[
+                { value: "window", label: "Окно" },
+                { value: "door", label: "Дверь" },
+              ]}
+              className="sm:grid-cols-1"
+            />
+          </FieldBlock>
 
-      <div className="grid cols-2" style={{ gap: 12 }}>
-        <label className="field">
-          <span className="fieldLabel">Ширина (см)</span>
-          <input value={widthCm} onChange={(e) => setWidthCm(e.target.value)} inputMode="decimal" />
-        </label>
-        <label className="field">
-          <span className="fieldLabel">Высота (см)</span>
-          <input value={heightCm} onChange={(e) => setHeightCm(e.target.value)} inputMode="decimal" />
-        </label>
-        <label className="field">
-          <span className="fieldLabel">Количество</span>
-          <input value={quantity} onChange={(e) => setQuantity(e.target.value)} inputMode="numeric" />
-        </label>
-        <label className="field">
-          <span className="fieldLabel">Тип</span>
-          <select value={productType} onChange={(e) => setProductType(e.target.value as "window" | "door")}>
-            <option value="window">Окно</option>
-            <option value="door">Дверь</option>
-          </select>
-        </label>
-
-        {productType === "door" ? (
-          <label className="field">
-            <span className="fieldLabel">Подтип двери</span>
-            <select value={doorSubtype} onChange={(e) => setDoorSubtype(e.target.value as keyof typeof DOOR_SUBTYPE_LABELS)}>
-              {Object.entries(DOOR_SUBTYPE_LABELS).map(([key, label]) => (
-                <option key={key} value={key}>
-                  {label}
-                </option>
-              ))}
-            </select>
-          </label>
-        ) : null}
-
-        <label className="field">
-          <span className="fieldLabel">Створок</span>
-          <input value={sashCount} onChange={(e) => setSashCount(e.target.value)} inputMode="numeric" />
-        </label>
-        <label className="field">
-          <span className="fieldLabel">Открывающихся</span>
-          <input value={openingSashes} onChange={(e) => setOpeningSashes(e.target.value)} inputMode="numeric" />
-        </label>
-        <label className="field">
-          <span className="fieldLabel">Открывание</span>
-          <select value={openingType} onChange={(e) => setOpeningType(e.target.value as keyof typeof OPENING_TYPE_LABELS)}>
-            {Object.entries(OPENING_TYPE_LABELS).map(([key, label]) => (
-              <option key={key} value={key}>
-                {label}
-              </option>
-            ))}
-          </select>
-        </label>
-
-        {meetingPairEligible ? (
-          <label className="row" style={{ gap: 10, alignItems: "center" }}>
-            <input type="checkbox" checked={meetingPairNoMullion} onChange={(e) => setMeetingPairNoMullion(e.target.checked)} />
-            <span>Без импоста (meeting pair)</span>
-          </label>
-        ) : null}
-
-        <label className="field">
-          <span className="fieldLabel">Серия профиля</span>
-          <select value={profileSeries} onChange={(e) => setProfileSeries(e.target.value as keyof typeof PROFILE_SERIES_LABELS)}>
-            {Object.entries(PROFILE_SERIES_LABELS).map(([key, label]) => (
-              <option key={key} value={key}>
-                {label}
-              </option>
-            ))}
-          </select>
-        </label>
-        <label className="field">
-          <span className="fieldLabel">Глубина (мм)</span>
-          <input value={profileDepthMm} onChange={(e) => setProfileDepthMm(e.target.value)} inputMode="numeric" />
-        </label>
-        <label className="field">
-          <span className="fieldLabel">Стеклопакет</span>
-          <select value={glazing} onChange={(e) => setGlazing(e.target.value as keyof typeof GLAZING_LABELS)}>
-            {Object.entries(GLAZING_LABELS).map(([key, label]) => (
-              <option key={key} value={key}>
-                {label}
-              </option>
-            ))}
-          </select>
-        </label>
-        <label className="field">
-          <span className="fieldLabel">Дизайн</span>
-          <select value={designOption} onChange={(e) => setDesignOption(e.target.value as DesignOption)}>
-            <option value="none">{DESIGN_OPTION_LABELS.none}</option>
-            <option value="outside">{DESIGN_OPTION_LABELS.outside}</option>
-            <option value="inside">{DESIGN_OPTION_LABELS.inside}</option>
-            <option value="twoSideWhite">{DESIGN_OPTION_LABELS.twoSideWhite}</option>
-            <option value="twoSideColor">{DESIGN_OPTION_LABELS.twoSideColor}</option>
-          </select>
-        </label>
-      </div>
-
-      {productType === "door" && (doorSubtype === "entrance" || doorSubtype === "interior") ? (
-        <div className="grid cols-2" style={{ gap: 12 }}>
-          <label className="field">
-            <span className="fieldLabel">Заполнение</span>
-            <select value={fillType} onChange={(e) => setFillType(e.target.value as keyof typeof ENTRANCE_FILL_LABELS)}>
-              {Object.entries(ENTRANCE_FILL_LABELS).map(([key, label]) => (
-                <option key={key} value={key}>
-                  {label}
-                </option>
-              ))}
-            </select>
-          </label>
-        </div>
-      ) : null}
-
-      <div className="grid cols-2" style={{ gap: 12 }}>
-        <label className="row" style={{ gap: 10, alignItems: "center" }}>
-          <input type="checkbox" checked={energySaving} onChange={(e) => setEnergySaving(e.target.checked)} />
-          <span>Энергосбережение</span>
-        </label>
-        <label className="row" style={{ gap: 10, alignItems: "center" }}>
-          <input type="checkbox" checked={multiFunctional} onChange={(e) => setMultiFunctional(e.target.checked)} />
-          <span>Мультифункциональное</span>
-        </label>
-      </div>
-
-      <section className="card" style={{ display: "grid", gap: 10 }}>
-        <h3>Комплектующие</h3>
-        <div className="grid cols-2" style={{ gap: 8 }}>
-          {KNOWN_OPTION_KEYS.map((key) => (
-            <label key={key} className="row" style={{ gap: 10, alignItems: "center" }}>
-              <input
-                type="checkbox"
-                checked={Boolean(selectedOptions[key])}
-                onChange={(e) => setSelectedOptions((prev) => ({ ...prev, [key]: e.target.checked }))}
+          {productType === "door" ? (
+            <FieldBlock label="Подтип двери">
+              <ModeToggleGroup<keyof typeof DOOR_SUBTYPE_LABELS>
+                value={doorSubtype}
+                onChange={setDoorSubtype}
+                options={Object.entries(DOOR_SUBTYPE_LABELS).map(([key, label]) => ({
+                  value: key as keyof typeof DOOR_SUBTYPE_LABELS,
+                  label,
+                }))}
+                className="sm:grid-cols-1"
               />
-              <span>{OPTION_LABELS[key] ?? key}</span>
-            </label>
+            </FieldBlock>
+          ) : null}
+
+          <NumberStepperField label="Створок" value={sashCount} onChange={setSashCount} min={1} step={1} />
+          <NumberStepperField label="Открывающихся" value={openingSashes} onChange={setOpeningSashes} min={0} step={1} />
+          <FieldBlock label="Открывание">
+            <ModeToggleGroup<keyof typeof OPENING_TYPE_LABELS>
+              value={openingType}
+              onChange={setOpeningType}
+              options={Object.entries(OPENING_TYPE_LABELS).map(([key, label]) => ({
+                value: key as keyof typeof OPENING_TYPE_LABELS,
+                label,
+              }))}
+              className="sm:grid-cols-1"
+            />
+          </FieldBlock>
+
+          {meetingPairEligible ? (
+            <SwitchField
+              title="Без импоста (meeting pair)"
+              checked={meetingPairNoMullion}
+              onCheckedChange={setMeetingPairNoMullion}
+              className="xl:col-span-2"
+            />
+          ) : null}
+
+          <FieldBlock label="Серия профиля">
+            <ModeToggleGroup<keyof typeof PROFILE_SERIES_LABELS>
+              value={profileSeries}
+              onChange={setProfileSeries}
+              options={Object.entries(PROFILE_SERIES_LABELS).map(([key, label]) => ({
+                value: key as keyof typeof PROFILE_SERIES_LABELS,
+                label,
+              }))}
+              className="sm:grid-cols-1"
+            />
+          </FieldBlock>
+          <NumberStepperField label="Глубина (мм)" value={profileDepthMm} onChange={setProfileDepthMm} min={40} step={5} />
+          <FieldBlock label="Стеклопакет">
+            <ModeToggleGroup<keyof typeof GLAZING_LABELS>
+              value={glazing}
+              onChange={setGlazing}
+              options={Object.entries(GLAZING_LABELS).map(([key, label]) => ({
+                value: key as keyof typeof GLAZING_LABELS,
+                label,
+              }))}
+              className="sm:grid-cols-1"
+            />
+          </FieldBlock>
+          <FieldBlock label="Дизайн">
+            <NativeSelect value={designOption} onChange={(e) => setDesignOption(e.target.value as DesignOption)}>
+              <option value="none">{DESIGN_OPTION_LABELS.none}</option>
+              <option value="outside">{DESIGN_OPTION_LABELS.outside}</option>
+              <option value="inside">{DESIGN_OPTION_LABELS.inside}</option>
+              <option value="twoSideWhite">{DESIGN_OPTION_LABELS.twoSideWhite}</option>
+              <option value="twoSideColor">{DESIGN_OPTION_LABELS.twoSideColor}</option>
+            </NativeSelect>
+          </FieldBlock>
+          {designOption !== "none" ? (
+            <FieldBlock label="Цвет ламинации">
+              <NativeSelect value={laminationColor} onChange={(e) => setLaminationColor(e.target.value as keyof typeof LAMINATION_COLOR_LABELS)}>
+                {Object.entries(LAMINATION_COLOR_LABELS).map(([key, label]) => (
+                  <option key={key} value={key}>
+                    {label}
+                  </option>
+                ))}
+              </NativeSelect>
+            </FieldBlock>
+          ) : null}
+          {productType === "door" && hardwareCatalog.length ? (
+            <FieldBlock label="Фурнитура">
+              <NativeSelect value={hardwareKey} onChange={(e) => setHardwareKey(e.target.value)}>
+                {hardwareCatalog.map((item) => (
+                  <option key={item.key} value={item.key}>
+                    {item.label}
+                  </option>
+                ))}
+              </NativeSelect>
+            </FieldBlock>
+          ) : null}
+        </div>
+
+        {productType === "door" && (doorSubtype === "entrance" || doorSubtype === "interior") ? (
+          <div className="mt-4 grid gap-4 md:grid-cols-3">
+            <FieldBlock label="Общее заполнение">
+              <ModeToggleGroup<keyof typeof ENTRANCE_FILL_LABELS>
+                value={fillType}
+                onChange={setFillType}
+                options={Object.entries(ENTRANCE_FILL_LABELS).map(([key, label]) => ({
+                  value: key as keyof typeof ENTRANCE_FILL_LABELS,
+                  label,
+                }))}
+                className="sm:grid-cols-1"
+              />
+            </FieldBlock>
+            <FieldBlock label="Верх двери">
+              <NativeSelect value={fillTop} onChange={(e) => setFillTop(e.target.value as keyof typeof ENTRANCE_FILL_LABELS)}>
+                {Object.entries(ENTRANCE_FILL_LABELS).map(([key, label]) => (
+                  <option key={`top-${key}`} value={key}>
+                    {label}
+                  </option>
+                ))}
+              </NativeSelect>
+            </FieldBlock>
+            <FieldBlock label="Низ двери">
+              <NativeSelect value={fillBottom} onChange={(e) => setFillBottom(e.target.value as keyof typeof ENTRANCE_FILL_LABELS)}>
+                {Object.entries(ENTRANCE_FILL_LABELS).map(([key, label]) => (
+                  <option key={`bottom-${key}`} value={key}>
+                    {label}
+                  </option>
+                ))}
+              </NativeSelect>
+            </FieldBlock>
+          </div>
+        ) : null}
+
+        <div className="mt-4 grid gap-3 md:grid-cols-2">
+          <SwitchField
+            title="Энергосбережение"
+            checked={energySaving}
+            onCheckedChange={setEnergySaving}
+          />
+          <SwitchField
+            title="Мультифункциональное"
+            checked={multiFunctional}
+            onCheckedChange={setMultiFunctional}
+          />
+        </div>
+      </SectionCard>
+
+      <SectionCard title="Комплектующие">
+        <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+          {KNOWN_OPTION_KEYS.map((key) => (
+            <SwitchField
+              key={key}
+              title={OPTION_LABELS[key] ?? key}
+              checked={Boolean(selectedOptions[key])}
+              onCheckedChange={(checked) => setSelectedOptions((prev) => ({ ...prev, [key]: checked }))}
+              size="sm"
+            />
           ))}
         </div>
-      </section>
+      </SectionCard>
 
-      <section className="card" style={{ display: "grid", gap: 10 }}>
-        <h3>Услуги</h3>
-        <div className="grid cols-2" style={{ gap: 12 }}>
-          <label className="row" style={{ gap: 10, alignItems: "center" }}>
-            <input type="checkbox" checked={installEnabled} onChange={(e) => setInstallEnabled(e.target.checked)} />
-            <span>Монтаж</span>
-          </label>
-          <label className="row" style={{ gap: 10, alignItems: "center" }}>
-            <input type="checkbox" checked={deliveryEnabled} onChange={(e) => setDeliveryEnabled(e.target.checked)} />
-            <span>Доставка</span>
-          </label>
-          <label className="field" style={{ gridColumn: "1 / -1" }}>
-            <span className="fieldLabel">Км доставки</span>
-            <input value={deliveryKm} onChange={(e) => setDeliveryKm(e.target.value)} inputMode="decimal" disabled={!deliveryEnabled} />
-          </label>
+      <SectionCard title="Услуги">
+        <div className="grid gap-4 md:grid-cols-2">
+          <SwitchField
+            title="Монтаж"
+            checked={installEnabled}
+            onCheckedChange={setInstallEnabled}
+          />
+          <SwitchField
+            title="Доставка"
+            checked={deliveryEnabled}
+            onCheckedChange={setDeliveryEnabled}
+          />
+          <NumberStepperField
+            label="Км доставки"
+            value={deliveryKm}
+            onChange={setDeliveryKm}
+            inputMode="decimal"
+            min={0}
+            step={1}
+            disabled={!deliveryEnabled}
+            className="md:col-span-2"
+          />
         </div>
-      </section>
+      </SectionCard>
 
       {preview.error ? (
-        <div className="errorBox">{preview.error}</div>
+        <PageAlert title="Ошибка расчёта" description={preview.error} />
       ) : preview.dto ? (
-        <section className="card" style={{ display: "grid", gap: 10 }}>
-          <h3>Итог</h3>
+        <SectionCard title="Итог" description="Сводка по pricing factors и derived values.">
+          <div className="grid gap-4">
+            {preview.dto.issues.errors.length ? (
+              <PageAlert
+                title="Ошибки расчёта"
+                description={
+                  <div className="grid gap-1">
+                    {preview.dto.issues.errors.slice(0, 3).map((e) => (
+                      <div key={e.code}>
+                        <b>{e.code}</b>: {e.message}
+                      </div>
+                    ))}
+                  </div>
+                }
+              />
+            ) : null}
 
-          {preview.dto.issues.errors.length ? (
-            <div className="errorBox">
-              {preview.dto.issues.errors.slice(0, 3).map((e) => (
-                <div key={e.code}>
-                  <b>{e.code}</b>: {e.message}
+            {preview.dto.issues.warnings.length ? (
+              <PageAlert
+                title="Предупреждения"
+                description={preview.dto.issues.warnings.slice(0, 3).map((w) => `${w.code}: ${w.message}`).join(" · ")}
+                variant="warning"
+              />
+            ) : null}
+
+            <div className="flex flex-wrap gap-2">
+              <ToneBadge tone="outline">Subtotal: {preview.dto.pricing.subtotal.toLocaleString("ru-RU")}</ToneBadge>
+              <ToneBadge tone="success">Total: {preview.dto.pricing.total.toLocaleString("ru-RU")}</ToneBadge>
+              <ToneBadge tone="outline">baseKey: {preview.dto.pricing.factors.baseKey}</ToneBadge>
+              <ToneBadge tone="outline">area: {preview.dto.pricing.factors.area.toFixed(3)}</ToneBadge>
+            </div>
+
+            {preview.dto.pricing.breakdown.groups.length ? (
+              <div className="grid gap-3 rounded-2xl border border-border/70 bg-background/70 p-4">
+                <div className="text-sm font-medium">Состав сметы</div>
+                <div className="grid gap-3">
+                  {preview.dto.pricing.breakdown.groups.map((group) => (
+                    <div key={group.key} className="grid gap-2 rounded-xl border border-border/60 bg-card/60 p-3">
+                      <div className="flex items-center justify-between gap-3 text-sm font-medium">
+                        <span>{group.key}</span>
+                        <span>{group.total.toLocaleString("ru-RU")}</span>
+                      </div>
+                      <div className="grid gap-1 text-sm text-muted-foreground">
+                        {group.items.map((item: CalcResultDTO["pricing"]["lineItems"][number]) => (
+                          <div key={`${group.key}:${item.key}:${item.title ?? ""}`} className="flex items-start justify-between gap-3">
+                            <span>{item.title ?? item.key}</span>
+                            <span>{item.total.toLocaleString("ru-RU")}</span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  ))}
                 </div>
-              ))}
-            </div>
-          ) : null}
+              </div>
+            ) : null}
 
-          {preview.dto.issues.warnings.length ? (
-            <section className="card noticeCard noticeCard-warning" style={{ margin: 0 }}>
-              <small className="noticeText-warning">
-                {preview.dto.issues.warnings.slice(0, 3).map((w) => `${w.code}: ${w.message}`).join(" · ")}
-              </small>
-            </section>
-          ) : null}
+            <div className="grid gap-4 md:grid-cols-2">
+              <div className="grid gap-3 rounded-2xl border border-border/70 bg-background/70 p-4">
+                <div className="text-sm font-medium">Базовые факторы</div>
+                <div className="grid gap-2 text-sm text-muted-foreground">
+                  <div>Subtotal: {preview.dto.pricing.subtotal.toLocaleString("ru-RU")}</div>
+                  <div>Total: {preview.dto.pricing.total.toLocaleString("ru-RU")}</div>
+                  <div>baseKey: {preview.dto.pricing.factors.baseKey}</div>
+                  <div>baseRate: {preview.dto.pricing.factors.baseRate}</div>
+                  <div>area: {preview.dto.pricing.factors.area.toFixed(3)}</div>
+                </div>
+              </div>
 
-          <div className="grid cols-2" style={{ gap: 12 }}>
-            <div className="kv">
-              <div className="kvRow">
-                <div className="kvLabel">Subtotal</div>
-                <div className="kvValue">{preview.dto.pricing.subtotal.toLocaleString("ru-RU")}</div>
-              </div>
-              <div className="kvRow">
-                <div className="kvLabel">Total</div>
-                <div className="kvValue">{preview.dto.pricing.total.toLocaleString("ru-RU")}</div>
-              </div>
-            </div>
-            <div className="kv">
-              <div className="kvRow">
-                <div className="kvLabel">baseKey</div>
-                <div className="kvValue">{preview.dto.pricing.factors.baseKey}</div>
-              </div>
-              <div className="kvRow">
-                <div className="kvLabel">baseRate</div>
-                <div className="kvValue">{preview.dto.pricing.factors.baseRate}</div>
-              </div>
-              <div className="kvRow">
-                <div className="kvLabel">area</div>
-                <div className="kvValue">{preview.dto.pricing.factors.area.toFixed(3)}</div>
+              <div className="grid gap-3 rounded-2xl border border-border/70 bg-background/70 p-4">
+                <div className="text-sm font-medium">Надбавки и сервисы</div>
+                <div className="grid gap-2 text-sm text-muted-foreground">
+                  <div>Комплектующие: {preview.dto.pricing.factors.optionsTotal.toLocaleString("ru-RU")}</div>
+                  <div>Фурнитура: {preview.dto.pricing.factors.hardwareTotal.toLocaleString("ru-RU")}</div>
+                  <div>
+                    Створки: {preview.dto.pricing.factors.openingSashes} / {preview.dto.pricing.factors.openingSashFee.toLocaleString("ru-RU")}
+                  </div>
+                  <div>
+                    Meeting pair: {preview.dto.derived.meetingPairKitCount} / {preview.dto.pricing.factors.meetingPairKitFee.toLocaleString("ru-RU")}
+                  </div>
+                  <div>
+                    Импосты: {preview.dto.derived.mullionCount} / {preview.dto.pricing.factors.mullionFee.toLocaleString("ru-RU")}
+                  </div>
+                  <div>Изделия без услуг: {preview.dto.pricing.factors.itemsSubtotal.toLocaleString("ru-RU")}</div>
+                  <div>Монтаж: {preview.dto.pricing.factors.installFee.toLocaleString("ru-RU")}</div>
+                  <div>Доставка: {preview.dto.pricing.factors.deliveryFee.toLocaleString("ru-RU")}</div>
+                  <div>Округление: {preview.dto.pricing.factors.roundingDelta.toLocaleString("ru-RU")}</div>
+                  <div>
+                    Стекло, м²: {typeof preview.dto.derived.glassAreaTotal_m2 === "number" ? preview.dto.derived.glassAreaTotal_m2.toFixed(3) : "-"}
+                  </div>
+                  <div>
+                    Секции (мм): {preview.dto.sections.length ? preview.dto.sections.map((s) => `${s.index + 1}:${s.secW_mm}`).join(", ") : "-"}
+                  </div>
+                </div>
               </div>
             </div>
           </div>
-
-          <div className="kv">
-            <div className="kvRow">
-              <div className="kvLabel">Комплектующие</div>
-              <div className="kvValue">{preview.dto.pricing.factors.optionsTotal.toLocaleString("ru-RU")}</div>
-            </div>
-            <div className="kvRow">
-              <div className="kvLabel">Створки</div>
-              <div className="kvValue">
-                {preview.dto.pricing.factors.openingSashes} / {preview.dto.pricing.factors.openingSashFee.toLocaleString("ru-RU")}
-              </div>
-            </div>
-            <div className="kvRow">
-              <div className="kvLabel">Meeting pair</div>
-              <div className="kvValue">
-                {preview.dto.derived.meetingPairKitCount} / {preview.dto.pricing.factors.meetingPairKitFee.toLocaleString("ru-RU")}
-              </div>
-            </div>
-            <div className="kvRow">
-              <div className="kvLabel">Импосты</div>
-              <div className="kvValue">
-                {preview.dto.derived.mullionCount} / {preview.dto.pricing.factors.mullionFee.toLocaleString("ru-RU")}
-              </div>
-            </div>
-            <div className="kvRow">
-              <div className="kvLabel">Монтаж</div>
-              <div className="kvValue">{preview.dto.pricing.factors.installFee.toLocaleString("ru-RU")}</div>
-            </div>
-            <div className="kvRow">
-              <div className="kvLabel">Доставка</div>
-              <div className="kvValue">{preview.dto.pricing.factors.deliveryFee.toLocaleString("ru-RU")}</div>
-            </div>
-            <div className="kvRow">
-              <div className="kvLabel">Стекло, м²</div>
-              <div className="kvValue">
-                {typeof preview.dto.derived.glassAreaTotal_m2 === "number" ? preview.dto.derived.glassAreaTotal_m2.toFixed(3) : "-"}
-              </div>
-            </div>
-            <div className="kvRow">
-              <div className="kvLabel">Секции (мм)</div>
-              <div className="kvValue">
-                {preview.dto.sections.length
-                  ? preview.dto.sections.map((s) => `${s.index + 1}:${s.secW_mm}`).join(", ")
-                  : "-"}
-              </div>
-            </div>
-          </div>
-        </section>
+        </SectionCard>
       ) : null}
-    </section>
+    </div>
   );
 }

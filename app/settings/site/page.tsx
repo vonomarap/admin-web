@@ -1,22 +1,25 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { signOut } from "firebase/auth";
 import { doc, getDoc, serverTimestamp, setDoc } from "firebase/firestore";
-import { auth, db } from "../../../lib/firebase";
+import { Globe, Handshake, Save } from "lucide-react";
+import { db } from "../../../lib/firebase";
 import { useAdminSession } from "../../../components/AdminSessionProvider";
 import { AdminLoginScreen, LoadingScreen, MissingConfigScreen, NoAccessScreen } from "../../../components/AdminScreens";
 import { AdminShell } from "../../../components/AdminShell";
+import { FieldBlock, InlineMeta, PageAlert, SectionCard, SwitchField } from "../../../components/admin-kit";
 import { MediaUploadButton } from "../../../components/forms/MediaUploadButton";
 import { ImageThumbPreview } from "../../../components/forms/ImageThumbPreview";
+import { Button } from "../../../components/ui/button";
+import { Input } from "../../../components/ui/input";
+import { Textarea } from "../../../components/ui/textarea";
 
 function asString(value: unknown): string {
   return typeof value === "string" ? value : "";
 }
 
 function normalizeText(value: string): string {
-  const trimmed = (value || "").trim();
-  return trimmed;
+  return (value || "").trim();
 }
 
 export default function SiteSettingsPage(): JSX.Element {
@@ -30,8 +33,10 @@ export default function SiteSettingsPage(): JSX.Element {
   const [brandName, setBrandName] = useState("");
   const [tagline, setTagline] = useState("");
   const [phone, setPhone] = useState("");
+  const [email, setEmail] = useState("");
   const [whatsapp, setWhatsapp] = useState("");
   const [telegram, setTelegram] = useState("");
+  const [maxUrl, setMaxUrl] = useState("");
   const [copyrightText, setCopyrightText] = useState("");
 
   const [partnerEnabled, setPartnerEnabled] = useState(true);
@@ -41,35 +46,41 @@ export default function SiteSettingsPage(): JSX.Element {
   const [partnerLogoUrl, setPartnerLogoUrl] = useState("");
   const [partnerBulletsText, setPartnerBulletsText] = useState("");
 
-  const hasChanges = useMemo(() => {
-    return Boolean(
-      brandName.trim() ||
-        tagline.trim() ||
-        phone.trim() ||
-        whatsapp.trim() ||
-        telegram.trim() ||
-        copyrightText.trim() ||
-        partnerEnabled === false ||
-        partnerKicker.trim() ||
-        partnerFactoryName.trim() ||
-        partnerDescription.trim() ||
-        partnerLogoUrl.trim() ||
-        partnerBulletsText.trim()
-    );
-  }, [
-    brandName,
-    copyrightText,
-    partnerBulletsText,
-    partnerDescription,
-    partnerEnabled,
-    partnerFactoryName,
-    partnerKicker,
-    partnerLogoUrl,
-    phone,
-    tagline,
-    telegram,
-    whatsapp
-  ]);
+  const hasChanges = useMemo(
+    () =>
+      Boolean(
+        brandName.trim() ||
+          tagline.trim() ||
+          phone.trim() ||
+          email.trim() ||
+          whatsapp.trim() ||
+          telegram.trim() ||
+          maxUrl.trim() ||
+          copyrightText.trim() ||
+          partnerEnabled === false ||
+          partnerKicker.trim() ||
+          partnerFactoryName.trim() ||
+          partnerDescription.trim() ||
+          partnerLogoUrl.trim() ||
+          partnerBulletsText.trim()
+      ),
+    [
+      brandName,
+      copyrightText,
+      partnerBulletsText,
+      partnerDescription,
+      partnerEnabled,
+      partnerFactoryName,
+      partnerKicker,
+      partnerLogoUrl,
+      phone,
+      email,
+      tagline,
+      telegram,
+      maxUrl,
+      whatsapp,
+    ]
+  );
 
   const load = useCallback(async () => {
     if (!db) return;
@@ -84,8 +95,10 @@ export default function SiteSettingsPage(): JSX.Element {
       setBrandName(asString(data.brandName));
       setTagline(asString(data.tagline));
       setPhone(asString(data.phone));
+      setEmail(asString(data.email));
       setWhatsapp(asString(data.whatsapp));
       setTelegram(asString(data.telegram));
+      setMaxUrl(asString(data.maxUrl));
       setCopyrightText(asString(data.copyrightText));
 
       setPartnerEnabled(typeof data.partnerEnabled === "boolean" ? data.partnerEnabled : true);
@@ -129,8 +142,10 @@ export default function SiteSettingsPage(): JSX.Element {
         brandName: normalizeText(brandName),
         tagline: normalizeText(tagline),
         phone: normalizeText(phone),
+        email: normalizeText(email),
         whatsapp: normalizeText(whatsapp),
         telegram: normalizeText(telegram),
+        maxUrl: normalizeText(maxUrl),
         copyrightText: normalizeText(copyrightText),
         partnerEnabled,
         partnerKicker: normalizeText(partnerKicker),
@@ -138,7 +153,7 @@ export default function SiteSettingsPage(): JSX.Element {
         partnerDescription: normalizeText(partnerDescription),
         partnerLogoUrl: normalizeText(partnerLogoUrl),
         partnerBullets,
-        updatedAt: serverTimestamp()
+        updatedAt: serverTimestamp(),
       };
 
       await setDoc(ref, payload, { merge: true });
@@ -162,171 +177,152 @@ export default function SiteSettingsPage(): JSX.Element {
       subtitle={session.user?.email ?? ""}
       rightActions={
         <>
-          <button className="secondary" onClick={() => void load()} disabled={loadingData || saving}>
-            Обновить
-          </button>
-          <button onClick={() => void onSave()} disabled={saving}>
+          <Button onClick={() => void onSave()} disabled={saving}>
+            <Save data-icon="inline-start" />
             {saving ? "Сохранение..." : "Сохранить"}
-          </button>
-          <button onClick={() => void signOut(auth!)} disabled={!auth}>
-            Выйти
-          </button>
+          </Button>
         </>
       }
     >
-      {loadError ? (
-        <section className="card noticeCard noticeCard-error">
-          <h3 style={{ marginBottom: 6 }}>Ошибка загрузки</h3>
-          <small className="noticeText-danger">{loadError}</small>
-        </section>
-      ) : null}
+      <div className="flex flex-col gap-6">
+        {loadError ? <PageAlert title="Ошибка загрузки" description={loadError} /> : null}
+        {saveError ? <PageAlert title="Ошибка сохранения" description={saveError} /> : null}
 
-      {saveError ? <div className="errorBox">{saveError}</div> : null}
+        <SectionCard
+          eyebrow="Публичная часть"
+          title="Футер и контакты"
+          description="Основные публичные контакты и брендовые тексты, которые используются на сайте."
+          icon={Globe}
+          tone="slate"
+          footer={
+            <>
+              <InlineMeta
+                items={[
+                  hasChanges ? "Есть несохраненные изменения" : "Изменений нет",
+                  "Firestore → app_settings/site",
+                ]}
+              />
+              <Button type="button" onClick={() => void onSave()} disabled={saving}>
+                {saving ? "Сохранение..." : "Сохранить"}
+              </Button>
+            </>
+          }
+        >
+          <div className="grid gap-4 lg:grid-cols-2">
+            <FieldBlock label="Бренд">
+              <Input value={brandName} onChange={(e) => setBrandName(e.target.value)} placeholder="KanOkna" />
+            </FieldBlock>
 
-      <section className="card">
-        <div className="rowActions" style={{ justifyContent: "space-between" }}>
-          <div style={{ display: "grid", gap: 2 }}>
-            <h2>Футер</h2>
-            <small>Контакты и ссылки для сайта</small>
+            <FieldBlock label="Слоган">
+              <Input value={tagline} onChange={(e) => setTagline(e.target.value)} placeholder="Окна и двери под ключ" />
+            </FieldBlock>
+
+            <FieldBlock label="Телефон" description="Будет кликабельно как `tel:`.">
+              <Input value={phone} onChange={(e) => setPhone(e.target.value)} placeholder="+7 999 123-45-67" />
+            </FieldBlock>
+
+            <FieldBlock label="Email" description="Будет кликабельно как `mailto:`.">
+              <Input value={email} onChange={(e) => setEmail(e.target.value)} placeholder="name@example.com" />
+            </FieldBlock>
+
+            <FieldBlock label="WhatsApp">
+              <Input value={whatsapp} onChange={(e) => setWhatsapp(e.target.value)} placeholder="+7 999 123-45-67 или https://wa.me/..." />
+            </FieldBlock>
+
+            <FieldBlock label="Telegram">
+              <Input value={telegram} onChange={(e) => setTelegram(e.target.value)} placeholder="@username или https://t.me/..." />
+            </FieldBlock>
+
+            <FieldBlock label="MAX" description="Укажите готовую ссылку на профиль или чат MAX.">
+              <Input value={maxUrl} onChange={(e) => setMaxUrl(e.target.value)} placeholder="https://max.ru/..." />
+            </FieldBlock>
+
+            <FieldBlock label="Копирайт">
+              <Input value={copyrightText} onChange={(e) => setCopyrightText(e.target.value)} placeholder="© 2026 KanOkna" />
+            </FieldBlock>
           </div>
-          <small>Данные: Firestore → app_settings/site</small>
-        </div>
+        </SectionCard>
 
-        <div className="editPanel" style={{ marginTop: 12 }}>
-          <div className="editGrid">
-            <div className="field">
-              <div className="fieldLabel">Бренд (название)</div>
-              <input value={brandName} onChange={(e) => setBrandName(e.target.value)} placeholder="KanOkna" />
+        <SectionCard
+          eyebrow="Главная страница"
+          title="Блок официального партнера"
+          description="Промо-блок на главной после популярных товаров. Управляет видимостью, текстами и логотипом."
+          icon={Handshake}
+          tone="slate"
+          footer={
+            <div className="flex w-full justify-end">
+              <Button type="button" onClick={() => void onSave()} disabled={saving}>
+                {saving ? "Сохранение..." : "Сохранить"}
+              </Button>
             </div>
+          }
+        >
+          <div className="grid gap-4">
+            <SwitchField
+              title={partnerEnabled ? "Блок включен" : "Блок выключен"}
+              description="Если выключить, партнёрский блок полностью скрывается на главной."
+              checked={partnerEnabled}
+              onCheckedChange={setPartnerEnabled}
+            />
 
-            <div className="field">
-              <div className="fieldLabel">Слоган</div>
-              <input value={tagline} onChange={(e) => setTagline(e.target.value)} placeholder="Окна и двери под ключ" />
-            </div>
+            <div className="grid gap-4 lg:grid-cols-2">
+              <FieldBlock label="Кикер">
+                <Input value={partnerKicker} onChange={(e) => setPartnerKicker(e.target.value)} placeholder="Официальный партнер" />
+              </FieldBlock>
 
-            <div className="field">
-              <div className="fieldLabel">Телефон</div>
-              <input value={phone} onChange={(e) => setPhone(e.target.value)} placeholder="+7 999 123-45-67" />
-              <small>Будет кликабельно (tel:)</small>
-            </div>
-
-            <div className="field">
-              <div className="fieldLabel">WhatsApp</div>
-              <input value={whatsapp} onChange={(e) => setWhatsapp(e.target.value)} placeholder="+7 999 123-45-67 или https://wa.me/..." />
-            </div>
-
-            <div className="field">
-              <div className="fieldLabel">Telegram</div>
-              <input value={telegram} onChange={(e) => setTelegram(e.target.value)} placeholder="@username или https://t.me/..." />
-            </div>
-
-            <div className="field">
-              <div className="fieldLabel">Копирайт</div>
-              <input value={copyrightText} onChange={(e) => setCopyrightText(e.target.value)} placeholder="© 2026 KanOkna" />
-            </div>
-          </div>
-
-          <div className="filtersFooter" style={{ justifyContent: "space-between" }}>
-            <small>
-              {hasChanges ? "Есть изменения" : "Изменений нет"} • Пустые поля будут скрыты на сайте
-            </small>
-            <button type="button" onClick={() => void onSave()} disabled={saving}>
-              {saving ? "Сохранение..." : "Сохранить"}
-            </button>
-	          </div>
-	        </div>
-	      </section>
-
-        <section className="card">
-          <div className="rowActions" style={{ justifyContent: "space-between" }}>
-            <div style={{ display: "grid", gap: 2 }}>
-              <h2>Официальный партнер (главная)</h2>
-              <small>Блок на главной странице после «Популярное»</small>
-            </div>
-            <small>Данные: Firestore → app_settings/site</small>
-          </div>
-
-          <div className="editPanel">
-            <div className="editGrid">
-              <div className="field">
-                <div className="fieldLabel">Показывать блок</div>
-                <label className="row" style={{ gap: 10, alignItems: "center" }}>
-                  <input
-                    type="checkbox"
-                    checked={partnerEnabled}
-                    onChange={(e) => setPartnerEnabled(e.target.checked)}
-                  />
-                  <span>{partnerEnabled ? "Включен" : "Выключен"}</span>
-                </label>
-              </div>
-
-              <div className="field">
-                <div className="fieldLabel">Кикер</div>
-                <input
-                  value={partnerKicker}
-                  onChange={(e) => setPartnerKicker(e.target.value)}
-                  placeholder="Официальный партнер"
-                />
-              </div>
-
-              <div className="field">
-                <div className="fieldLabel">Название фабрики</div>
-                <input
+              <FieldBlock label="Название фабрики">
+                <Input
                   value={partnerFactoryName}
                   onChange={(e) => setPartnerFactoryName(e.target.value)}
                   placeholder="Фабрика Дышащих Окон"
                 />
-              </div>
+              </FieldBlock>
 
-              <div className="field" style={{ gridColumn: "1 / -1" }}>
-                <div className="fieldLabel">Описание</div>
-                <textarea
-                  rows={3}
+              <FieldBlock label="Описание" className="lg:col-span-2">
+                <Textarea
+                  rows={4}
                   value={partnerDescription}
                   onChange={(e) => setPartnerDescription(e.target.value)}
                   placeholder="Работаем напрямую с производством. Оригинальные комплектующие и гарантия."
                 />
-              </div>
+              </FieldBlock>
 
-              <div className="field" style={{ gridColumn: "1 / -1" }}>
-                <div className="fieldLabel">URL логотипа</div>
-                <div className="rowActions" style={{ alignItems: "stretch" }}>
-                  <input
-                    value={partnerLogoUrl}
-                    onChange={(e) => setPartnerLogoUrl(e.target.value)}
-                    placeholder="https://..."
-                    autoCapitalize="none"
-                    style={{ flex: 1, minWidth: 0 }}
-                  />
-                  <MediaUploadButton
-                    folder="site"
-                    label="Загрузить"
-                    disabled={saving}
-                    onUploaded={(urls) => setPartnerLogoUrl(urls[0] ?? "")}
-                  />
+              <FieldBlock
+                label="URL логотипа"
+                description="Если поле пустое, на сайте будет иконка вместо логотипа."
+                className="lg:col-span-2"
+              >
+                <div className="grid gap-3">
+                  <div className="flex flex-col gap-3 sm:flex-row">
+                    <Input
+                      value={partnerLogoUrl}
+                      onChange={(e) => setPartnerLogoUrl(e.target.value)}
+                      placeholder="https://..."
+                      autoCapitalize="none"
+                    />
+                    <MediaUploadButton
+                      folder="site"
+                      label="Загрузить"
+                      disabled={saving}
+                      onUploaded={(urls) => setPartnerLogoUrl(urls[0] ?? "")}
+                    />
+                  </div>
+                  <ImageThumbPreview url={partnerLogoUrl} />
                 </div>
-                <ImageThumbPreview url={partnerLogoUrl} />
-                <small>Если поле пустое, на сайте будет иконка вместо логотипа.</small>
-              </div>
+              </FieldBlock>
 
-              <div className="field" style={{ gridColumn: "1 / -1" }}>
-                <div className="fieldLabel">Буллеты (по строке на пункт)</div>
-                <textarea
-                  rows={4}
+              <FieldBlock label="Буллеты" description="Каждая строка станет отдельным пунктом." className="lg:col-span-2">
+                <Textarea
+                  rows={5}
                   value={partnerBulletsText}
                   onChange={(e) => setPartnerBulletsText(e.target.value)}
                   placeholder={"Прямые поставки с производства\nОригинальные комплектующие\nГарантия и поддержка"}
                 />
-              </div>
-            </div>
-
-            <div className="filtersFooter" style={{ justifyContent: "flex-end" }}>
-              <button type="button" onClick={() => void onSave()} disabled={saving}>
-                {saving ? "Сохранение..." : "Сохранить"}
-              </button>
+              </FieldBlock>
             </div>
           </div>
-        </section>
-	    </AdminShell>
-	  );
+        </SectionCard>
+      </div>
+    </AdminShell>
+  );
 }

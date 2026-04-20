@@ -4,6 +4,9 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { ChevronDownIcon, ChevronUpIcon, TrashIcon } from "../Icons";
 import { auth, db } from "../../lib/firebase";
 import { uploadMediaFile, type MediaFolder } from "../../lib/media";
+import { Button } from "../ui/button";
+import { Card } from "../ui/card";
+import { Input } from "../ui/input";
 
 type ImageUrlRow = {
   id: string;
@@ -142,7 +145,7 @@ export function ImageUrlList({
         <div className="rowActions" style={{ justifyContent: "flex-end" }}>
           {uploadFolder ? (
             <>
-              <input
+              <Input
                 ref={uploadInputRef}
                 type="file"
                 accept="image/*"
@@ -150,19 +153,20 @@ export function ImageUrlList({
                 style={{ display: "none" }}
                 onChange={(e) => void onUpload(Array.from(e.currentTarget.files || []))}
               />
-              <button
+              <Button
                 type="button"
-                className="secondary small"
+                variant="secondary"
+                size="sm"
                 onClick={() => uploadInputRef.current?.click()}
                 disabled={disabled || uploading}
               >
                 {uploadInfo ? `Загрузка ${uploadInfo.index}/${uploadInfo.total}…` : uploadLabel}
-              </button>
+              </Button>
             </>
           ) : null}
-          <button type="button" className="secondary small" onClick={addRow} disabled={disabled || uploading}>
+          <Button type="button" variant="secondary" size="sm" onClick={addRow} disabled={disabled || uploading}>
             {addLabel}
-          </button>
+          </Button>
         </div>
       </div>
 
@@ -177,13 +181,10 @@ export function ImageUrlList({
 
           return (
             <div key={row.id} className="rowActions" style={{ alignItems: "flex-start", gap: 10 }}>
-              <div
+              <Card
                 style={{
                   width: 64,
                   height: 64,
-                  borderRadius: 14,
-                  border: "1px solid rgba(249, 115, 22, 0.18)",
-                  background: "rgba(255, 255, 255, 0.08)",
                   overflow: "hidden",
                   flex: "0 0 auto",
                 }}
@@ -199,10 +200,10 @@ export function ImageUrlList({
                     style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }}
                   />
                 ) : null}
-              </div>
+              </Card>
 
               <div style={{ flex: 1, minWidth: 0, display: "grid", gap: 6 }}>
-                <input
+                <Input
                   placeholder={inputPlaceholder}
                   value={row.url}
                   onChange={(e) => updateRow(row.id, { url: e.target.value })}
@@ -213,36 +214,39 @@ export function ImageUrlList({
               </div>
 
               <div className="rowActions" style={{ flexDirection: "column", gap: 8, alignItems: "stretch" }}>
-                <button
+                <Button
                   type="button"
-                  className="iconBtn iconBtn-secondary"
+                  variant="outline"
+                  size="icon"
                   aria-label="Вверх"
                   title="Вверх"
                   disabled={disabled || index === 0}
                   onClick={() => moveRow(index, -1)}
                 >
                   <ChevronUpIcon />
-                </button>
-                <button
+                </Button>
+                <Button
                   type="button"
-                  className="iconBtn iconBtn-secondary"
+                  variant="outline"
+                  size="icon"
                   aria-label="Вниз"
                   title="Вниз"
                   disabled={disabled || index === rows.length - 1}
                   onClick={() => moveRow(index, 1)}
                 >
                   <ChevronDownIcon />
-                </button>
-                <button
+                </Button>
+                <Button
                   type="button"
-                  className="iconBtn iconBtn-danger"
+                  variant="destructive"
+                  size="icon"
                   aria-label="Удалить"
                   title="Удалить"
                   disabled={disabled}
                   onClick={() => removeRow(row.id)}
                 >
                   <TrashIcon />
-                </button>
+                </Button>
               </div>
             </div>
           );

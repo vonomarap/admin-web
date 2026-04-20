@@ -10,6 +10,7 @@ import {
   XAxis,
   YAxis,
 } from "recharts";
+import { ChartContainer, ChartLegendContent, ChartTooltipContent, type ChartConfig } from "../ui/chart";
 
 export type ConversionAovPoint = {
   dateKey: string;
@@ -17,14 +18,16 @@ export type ConversionAovPoint = {
   aov: number;
 };
 
-const COLORS = {
-  conversion: "var(--chart-fg)",
-  aov: "var(--chart-muted)",
-  grid: "var(--chart-grid)",
-  axis: "var(--chart-muted)",
-  tooltipBg: "var(--chart-tooltip-bg)",
-  tooltipBorder: "var(--chart-tooltip-border)",
-};
+const chartConfig = {
+  conversionPct: {
+    label: "Конверсия (%)",
+    color: "var(--chart-fg)",
+  },
+  aov: {
+    label: "Средний чек",
+    color: "var(--chart-muted)",
+  },
+} satisfies ChartConfig;
 
 function formatTick(key: string): string {
   if (typeof key !== "string" || key.length !== 10) return String(key);
@@ -33,17 +36,17 @@ function formatTick(key: string): string {
 
 export function ConversionAovChart({ data }: { data: ConversionAovPoint[] }): JSX.Element {
   return (
-    <div style={{ width: "100%", height: 320 }}>
+    <ChartContainer config={chartConfig} className="h-[320px]">
       <ResponsiveContainer>
         <LineChart data={data} margin={{ top: 10, right: 16, left: 0, bottom: 8 }}>
-          <CartesianGrid stroke={COLORS.grid} strokeDasharray="2 10" vertical={false} />
+          <CartesianGrid stroke="var(--chart-grid)" strokeDasharray="2 10" vertical={false} />
           <XAxis
             dataKey="dateKey"
             tickFormatter={formatTick}
             minTickGap={18}
             axisLine={false}
             tickLine={false}
-            tick={{ fill: COLORS.axis, fontSize: 12 }}
+            tick={{ fill: "var(--chart-muted)", fontSize: 12 }}
             tickMargin={8}
           />
           <YAxis
@@ -65,43 +68,31 @@ export function ConversionAovChart({ data }: { data: ConversionAovPoint[] }): JS
             tickLine={false}
           />
           <Tooltip
-            cursor={{ stroke: "rgba(15, 23, 42, 0.22)", strokeWidth: 1 }}
-            contentStyle={{
-              backgroundColor: COLORS.tooltipBg,
-              border: `1px solid ${COLORS.tooltipBorder}`,
-              borderRadius: 12,
-              color: "var(--chart-fg)",
-              boxShadow: "0 10px 24px rgba(15, 23, 42, 0.12)",
-            }}
-            labelStyle={{ color: "var(--chart-muted)" }}
-            itemStyle={{ color: "var(--chart-fg)" }}
-            formatter={(value: unknown, name: unknown) => {
-              const safe = typeof value === "number" && Number.isFinite(value) ? value : 0;
-              if (name === "conversionPct") return [`${safe.toFixed(1)}%`, "Конверсия"];
-              if (name === "aov") return [safe.toLocaleString("ru-RU"), "Средний чек"];
-              return [safe.toLocaleString("ru-RU"), String(name)];
-            }}
-            labelFormatter={(label) => `Дата: ${String(label)}`}
+            cursor={{ stroke: "var(--chart-grid)", strokeWidth: 1 }}
+            content={
+              <ChartTooltipContent
+                labelFormatter={(label) => `Дата: ${formatTick(String(label ?? ""))}`}
+                valueFormatter={(value, key) => (key === "conversionPct" ? `${value.toFixed(1)}%` : value.toLocaleString("ru-RU"))}
+              />
+            }
           />
           <Legend
-            iconType="circle"
-            iconSize={8}
             verticalAlign="bottom"
             align="center"
             height={28}
-            wrapperStyle={{ color: "var(--chart-muted)", fontSize: 11 }}
+            content={<ChartLegendContent />}
           />
           <Line
             yAxisId="pct"
             type="natural"
             dataKey="conversionPct"
             name="Конверсия (%)"
-            stroke={COLORS.conversion}
+            stroke="var(--color-conversionPct)"
             strokeWidth={2}
             strokeLinecap="round"
             strokeLinejoin="round"
             dot={false}
-            activeDot={{ r: 3, fill: COLORS.conversion, stroke: "#ffffff", strokeWidth: 1 }}
+            activeDot={{ r: 3, fill: "var(--color-conversionPct)", stroke: "var(--background)", strokeWidth: 1 }}
             isAnimationActive
             animationDuration={520}
             animationEasing="ease-out"
@@ -111,19 +102,19 @@ export function ConversionAovChart({ data }: { data: ConversionAovPoint[] }): JS
             type="natural"
             dataKey="aov"
             name="Средний чек"
-            stroke={COLORS.aov}
+            stroke="var(--color-aov)"
             strokeWidth={2}
             strokeDasharray="6 9"
             strokeLinecap="round"
             strokeLinejoin="round"
             dot={false}
-            activeDot={{ r: 3, fill: COLORS.aov, stroke: "#ffffff", strokeWidth: 1 }}
+            activeDot={{ r: 3, fill: "var(--color-aov)", stroke: "var(--background)", strokeWidth: 1 }}
             isAnimationActive
             animationDuration={640}
             animationEasing="ease-out"
           />
         </LineChart>
       </ResponsiveContainer>
-    </div>
+    </ChartContainer>
   );
 }

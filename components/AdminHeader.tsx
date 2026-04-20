@@ -2,6 +2,7 @@
 
 import type { ReactNode } from "react";
 import { AdminNav } from "./AdminNav";
+import { Card } from "./ui/card";
 
 export function AdminHeader({
   title,
@@ -13,7 +14,7 @@ export function AdminHeader({
   rightActions?: ReactNode;
 }): JSX.Element {
   return (
-    <section className="card adminHeader">
+    <Card className="adminHeader">
       <div className="adminHeaderTop">
         <div style={{ minWidth: 0 }}>
           <h1>{title}</h1>
@@ -22,7 +23,6 @@ export function AdminHeader({
         {rightActions ? <div className="topbarActions">{rightActions}</div> : null}
       </div>
       <AdminNav />
-    </section>
+    </Card>
   );
 }
-

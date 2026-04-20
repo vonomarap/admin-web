@@ -1,8 +1,7 @@
 "use client";
 
 import { Fragment, useCallback, useEffect, useMemo, useState } from "react";
-import { useRouter } from "next/navigation";
-import { signOut } from "firebase/auth";
+import { Package } from "lucide-react";
 import {
   collection,
   deleteDoc,
@@ -15,13 +14,30 @@ import {
   updateDoc,
   writeBatch,
 } from "firebase/firestore";
-import { auth, db } from "../../lib/firebase";
+import { db } from "../../lib/firebase";
+import { useConfirmDialog } from "../../components/ConfirmDialogProvider";
 import { AdminLoginScreen, LoadingScreen, MissingConfigScreen, NoAccessScreen } from "../../components/AdminScreens";
 import { useAdminSession } from "../../components/AdminSessionProvider";
 import { AdminShell } from "../../components/AdminShell";
+import {
+  ActionIconButton,
+  EmptyState,
+  FieldBlock,
+  PageAlert,
+  SectionCard,
+  SwitchField,
+  ToneBadge,
+} from "../../components/admin-kit";
 import { ChevronDownIcon, ChevronUpIcon, EyeIcon, EyeOffIcon, PencilIcon, TrashIcon } from "../../components/Icons";
 import { MediaUploadButton } from "../../components/forms/MediaUploadButton";
 import { ImageThumbPreview } from "../../components/forms/ImageThumbPreview";
+import { Badge } from "../../components/ui/badge";
+import { Button } from "../../components/ui/button";
+import { Card, CardContent, CardHeader, CardTitle } from "../../components/ui/card";
+import { Input } from "../../components/ui/input";
+import { NativeSelect } from "../../components/ui/native-select";
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../../components/ui/table";
+import { Textarea } from "../../components/ui/textarea";
 
 type Product = {
   id: string;
@@ -56,7 +72,7 @@ function formatCurrency(amount: number, currency?: string): string {
 
 export default function ProductsPage(): JSX.Element {
   const session = useAdminSession();
-  const router = useRouter();
+  const confirm = useConfirmDialog();
 
   const [loadError, setLoadError] = useState<string | null>(null);
   const [loadingData, setLoadingData] = useState(false);
@@ -117,7 +133,12 @@ export default function ProductsPage(): JSX.Element {
   const onInitializeSortOrder = async () => {
     if (!db) return;
     const firestore = db;
-    const ok = confirm("Задать порядок каталога по названию (A–Z)? Это перезапишет текущий порядок.");
+    const ok = await confirm({
+      title: "Инициализировать порядок каталога?",
+      description: "Текущий manual sort order будет перезаписан алфавитным порядком A–Z.",
+      confirmLabel: "Пересчитать",
+      variant: "destructive",
+    });
     if (!ok) return;
 
     setOrderBusy(true);
@@ -303,95 +324,112 @@ export default function ProductsPage(): JSX.Element {
 
   const onDeleteProduct = async (item: Product) => {
     if (!db) return;
-    const ok = confirm(`Удалить товар "${item.title}"? Это действие необратимо.`);
+    const ok = await confirm({
+      title: `Удалить товар "${item.title}"?`,
+      description: "Это действие необратимо.",
+      confirmLabel: "Удалить",
+      variant: "destructive",
+    });
     if (!ok) return;
     await deleteDoc(doc(db, "products", item.id));
     await loadProducts();
   };
 
   const productEditor = (
-    <div className="editPanel">
-      <div className="editGrid">
-        <div className="grid" style={{ gap: 10 }}>
-          <input
-            placeholder="Название"
-            value={productDraft.title}
-            onChange={(e) => setProductDraft((prev) => ({ ...prev, title: e.target.value }))}
-          />
-          <textarea
-            rows={3}
-            placeholder="Описание"
-            value={productDraft.description}
-            onChange={(e) => setProductDraft((prev) => ({ ...prev, description: e.target.value }))}
-          />
-          <div className="grid cols-2" style={{ gap: 10 }}>
-            <input
-              placeholder="Цена от"
-              value={productDraft.priceFrom}
-              onChange={(e) => setProductDraft((prev) => ({ ...prev, priceFrom: e.target.value }))}
-            />
-            <select value="RUB" disabled>
-              <option value="RUB">RUB</option>
-            </select>
-          </div>
-          <div style={{ display: "grid", gap: 8 }}>
-            <div className="rowActions" style={{ alignItems: "stretch" }}>
-              <input
-                placeholder="Ссылка на изображение"
-                value={productDraft.image}
-                onChange={(e) => setProductDraft((prev) => ({ ...prev, image: e.target.value }))}
-                autoCapitalize="none"
-                style={{ flex: 1, minWidth: 0 }}
+    <Card className="border-border/80 bg-background/60">
+      <CardHeader className="gap-1">
+        <CardTitle className="text-lg">Редактирование товара</CardTitle>
+      </CardHeader>
+      <CardContent className="grid gap-6 pt-0">
+        <div className="grid gap-4 xl:grid-cols-2">
+          <div className="grid gap-4">
+            <FieldBlock label="Название">
+              <Input
+                placeholder="Название"
+                value={productDraft.title}
+                onChange={(e) => setProductDraft((prev) => ({ ...prev, title: e.target.value }))}
               />
-              <MediaUploadButton
-                folder="products"
-                label="Загрузить"
-                disabled={productSaving}
-                onUploaded={(urls) => setProductDraft((prev) => ({ ...prev, image: urls[0] ?? "" }))}
+            </FieldBlock>
+            <FieldBlock label="Описание">
+              <Textarea
+                rows={4}
+                placeholder="Описание"
+                value={productDraft.description}
+                onChange={(e) => setProductDraft((prev) => ({ ...prev, description: e.target.value }))}
               />
-            </div>
-            <ImageThumbPreview url={productDraft.image} />
-            <small>Можно загрузить фото в «Медиа» и вставить URL сюда.</small>
-          </div>
-          <label className="row" style={{ gap: 10, alignItems: "center" }}>
-            <input
-              type="checkbox"
+            </FieldBlock>
+            <FieldBlock label="Цена от">
+              <div className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_140px]">
+                <Input
+                  placeholder="Цена от"
+                  value={productDraft.priceFrom}
+                  onChange={(e) => setProductDraft((prev) => ({ ...prev, priceFrom: e.target.value }))}
+                />
+                <NativeSelect value="RUB" disabled>
+                  <option value="RUB">RUB</option>
+                </NativeSelect>
+              </div>
+            </FieldBlock>
+            <FieldBlock label="Изображение" description="Можно загрузить фото в «Медиа» и вставить URL сюда.">
+              <div className="grid gap-3">
+                <div className="flex flex-col gap-3 sm:flex-row">
+                  <Input
+                    placeholder="Ссылка на изображение"
+                    value={productDraft.image}
+                    onChange={(e) => setProductDraft((prev) => ({ ...prev, image: e.target.value }))}
+                    autoCapitalize="none"
+                  />
+                  <MediaUploadButton
+                    folder="products"
+                    label="Загрузить"
+                    disabled={productSaving}
+                    onUploaded={(urls) => setProductDraft((prev) => ({ ...prev, image: urls[0] ?? "" }))}
+                  />
+                </div>
+                <ImageThumbPreview url={productDraft.image} />
+              </div>
+            </FieldBlock>
+            <SwitchField
+              title="Показывать в каталоге"
               checked={productDraft.active}
-              onChange={(e) => setProductDraft((prev) => ({ ...prev, active: e.target.checked }))}
+              onCheckedChange={(checked) => setProductDraft((prev) => ({ ...prev, active: checked }))}
             />
-            <span>Показывать в каталоге</span>
-          </label>
+          </div>
+
+          <div className="grid gap-4">
+            <FieldBlock label="Особенности">
+              <Textarea
+                rows={8}
+                placeholder="Особенности (по одной на строку)"
+                value={productDraft.features}
+                onChange={(e) => setProductDraft((prev) => ({ ...prev, features: e.target.value }))}
+              />
+            </FieldBlock>
+            <FieldBlock label="Характеристики JSON">
+              <Textarea
+                rows={8}
+                className="font-mono text-xs"
+                placeholder='Характеристики (JSON, например: {"Профиль":"KBE"})'
+                value={productDraft.specs}
+                onChange={(e) => setProductDraft((prev) => ({ ...prev, specs: e.target.value }))}
+                spellCheck={false}
+              />
+            </FieldBlock>
+          </div>
         </div>
 
-        <div className="grid" style={{ gap: 10 }}>
-          <textarea
-            rows={7}
-            placeholder="Особенности (по одной на строку)"
-            value={productDraft.features}
-            onChange={(e) => setProductDraft((prev) => ({ ...prev, features: e.target.value }))}
-          />
-          <textarea
-            rows={7}
-            className="codeArea"
-            placeholder='Характеристики (JSON, например: {"Профиль":"KBE"})'
-            value={productDraft.specs}
-            onChange={(e) => setProductDraft((prev) => ({ ...prev, specs: e.target.value }))}
-            spellCheck={false}
-          />
+        {productDraftError ? <PageAlert title="Не удалось сохранить товар" description={productDraftError} /> : null}
+
+        <div className="flex flex-wrap justify-end gap-3">
+          <Button type="button" variant="outline" onClick={cancelEditProduct} disabled={productSaving}>
+            Отмена
+          </Button>
+          <Button type="button" onClick={() => void onSaveProduct()} disabled={productSaving}>
+            {productSaving ? "Сохранение..." : "Сохранить"}
+          </Button>
         </div>
-      </div>
-
-      {productDraftError ? <div className="errorBox">{productDraftError}</div> : null}
-
-      <div className="rowActions" style={{ justifyContent: "flex-end" }}>
-        <button type="button" className="secondary" onClick={cancelEditProduct} disabled={productSaving}>
-          Отмена
-        </button>
-        <button type="button" onClick={() => void onSaveProduct()} disabled={productSaving}>
-          {productSaving ? "Сохранение..." : "Сохранить"}
-        </button>
-      </div>
-    </div>
+      </CardContent>
+    </Card>
   );
 
   if (session.status === "loading") return <LoadingScreen />;
@@ -403,156 +441,43 @@ export default function ProductsPage(): JSX.Element {
     <AdminShell
       title="Товары"
       subtitle={session.user?.email ?? ""}
-      rightActions={
-        <>
-          <button className="secondary" onClick={() => router.push("/products/new")}>
-            Добавить
-          </button>
-          <button className="secondary" onClick={() => void loadProducts()} disabled={loadingData}>
-            Обновить
-          </button>
-          <button onClick={() => void signOut(auth!)} disabled={!auth}>
-            Выйти
-          </button>
-        </>
-      }
     >
+      <div className="flex flex-col gap-6">
+        {loadError ? <PageAlert title="Ошибка загрузки данных" description={loadError} /> : null}
+        {orderError ? <PageAlert title="Ошибка изменения порядка" description={orderError} /> : null}
+        {hasMissingSortOrder ? (
+          <PageAlert
+            variant="warning"
+            title="Порядок каталога не задан"
+            description={
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <span>Нажмите «Инициализировать», чтобы включить сортировку и кнопки ↑/↓.</span>
+                <Button type="button" variant="secondary" onClick={() => void onInitializeSortOrder()} disabled={orderBusy || loadingData}>
+                  {orderBusy ? "Инициализация..." : "Инициализировать"}
+                </Button>
+              </div>
+            }
+          />
+        ) : null}
 
-      {loadError ? (
-        <section className="card noticeCard noticeCard-error">
-          <h3 style={{ marginBottom: 6 }}>Ошибка загрузки данных</h3>
-          <small className="noticeText-danger">{loadError}</small>
-        </section>
-      ) : null}
-
-      {orderError ? (
-        <section className="card noticeCard noticeCard-error">
-          <h3 style={{ marginBottom: 6 }}>Ошибка изменения порядка</h3>
-          <small className="noticeText-danger">{orderError}</small>
-        </section>
-      ) : null}
-
-      {hasMissingSortOrder ? (
-        <section className="card noticeCard noticeCard-warning">
-          <div className="rowActions" style={{ justifyContent: "space-between", alignItems: "center", gap: 12 }}>
-            <div style={{ display: "grid", gap: 4 }}>
-              <b>Порядок каталога не задан</b>
-              <small className="noticeText-warning">Нажмите «Инициализировать», чтобы включить сортировку и кнопки ↑/↓.</small>
-            </div>
-            <button type="button" className="secondary" onClick={() => void onInitializeSortOrder()} disabled={orderBusy || loadingData}>
-              {orderBusy ? "Инициализация..." : "Инициализировать"}
-            </button>
-          </div>
-        </section>
-      ) : null}
-
-      <section className="card">
-        <div className="rowActions" style={{ justifyContent: "space-between" }}>
-          <div style={{ display: "grid", gap: 2 }}>
-            <h2>Список</h2>
-            <small>{products.length} шт.</small>
-          </div>
-          <small>Порядок: используйте ↑/↓.</small>
-        </div>
-
-        <div className="mobileOnly" style={{ marginTop: 12 }}>
-          {products.length ? (
-            <div className="cardList">
-              {productsOrdered.map((item, index) => {
-                const visible = isVisible(item.active);
-                const isEditing = editingProductId === item.id;
-                const canMoveUp = !orderBusy && !hasMissingSortOrder && index > 0;
-                const canMoveDown = !orderBusy && !hasMissingSortOrder && index < productsOrdered.length - 1;
-
-                return (
-                  <div key={item.id} className="itemCard">
-                    <div className="itemHeader">
-                      <div style={{ display: "grid", gap: 2, minWidth: 0 }}>
-                        <b>{item.title}</b>
-                        <small className="breakLong">{item.id}</small>
-                      </div>
-                      {visible ? <span className="badge">Показано</span> : <span className="badge badge-muted">Скрыто</span>}
-                    </div>
-
-                    <div className="kv">
-                      <div className="kvRow">
-                        <div className="kvLabel">Цена</div>
-                        <div className="kvValue">{formatCurrency(item.priceFrom ?? 0, item.currency)}</div>
-                      </div>
-                    </div>
-
-                    <div className="rowActions" style={{ justifyContent: "flex-end" }}>
-                      <button
-                        type="button"
-                        className="iconBtn iconBtn-secondary"
-                        aria-label="Выше"
-                        title="Выше"
-                        onClick={() => void swapProducts(index, index - 1)}
-                        disabled={!canMoveUp}
-                      >
-                        <ChevronUpIcon />
-                      </button>
-                      <button
-                        type="button"
-                        className="iconBtn iconBtn-secondary"
-                        aria-label="Ниже"
-                        title="Ниже"
-                        onClick={() => void swapProducts(index, index + 1)}
-                        disabled={!canMoveDown}
-                      >
-                        <ChevronDownIcon />
-                      </button>
-                      <button
-                        type="button"
-                        className="iconBtn iconBtn-secondary"
-                        aria-label="Изменить"
-                        title="Изменить"
-                        onClick={() => startEditProduct(item)}
-                      >
-                        <PencilIcon />
-                      </button>
-                      <button
-                        type="button"
-                        className="iconBtn iconBtn-secondary"
-                        aria-label={visible ? "Скрыть" : "Показать"}
-                        title={visible ? "Скрыть" : "Показать"}
-                        onClick={() => void onToggleProductVisibility(item)}
-                      >
-                        {visible ? <EyeOffIcon /> : <EyeIcon />}
-                      </button>
-                      <button
-                        type="button"
-                        className="iconBtn iconBtn-danger"
-                        aria-label="Удалить"
-                        title="Удалить"
-                        onClick={() => void onDeleteProduct(item)}
-                      >
-                        <TrashIcon />
-                      </button>
-                    </div>
-
-                    {isEditing ? productEditor : null}
-                  </div>
-                );
-              })}
-            </div>
+        <SectionCard
+          eyebrow="Каталог"
+          title="Товары"
+          description="Управление порядком, видимостью и контентом каталога."
+          icon={Package}
+          tone="emerald"
+          footer={
+            <>
+              <div className="text-sm text-muted-foreground">{products.length} шт. • Порядок: используйте ↑/↓.</div>
+              <Badge variant="outline">Firestore → products</Badge>
+            </>
+          }
+        >
+          {!products.length ? (
+            <EmptyState title="Пока нет товаров" description="Добавьте первый товар, чтобы наполнить каталог." />
           ) : (
-            <small>Пока нет товаров.</small>
-          )}
-        </div>
-
-        <div className="desktopOnly" style={{ marginTop: 12 }}>
-          <div className="tableWrap">
-            <table>
-              <thead>
-                <tr>
-                  <th>Название</th>
-                  <th>Цена</th>
-                  <th>Статус</th>
-                  <th className="actionsCol">Действия</th>
-                </tr>
-              </thead>
-              <tbody>
+            <div className="grid gap-4">
+              <div className="grid gap-3 lg:hidden">
                 {productsOrdered.map((item, index) => {
                   const visible = isVisible(item.active);
                   const isEditing = editingProductId === item.id;
@@ -560,82 +485,116 @@ export default function ProductsPage(): JSX.Element {
                   const canMoveDown = !orderBusy && !hasMissingSortOrder && index < productsOrdered.length - 1;
 
                   return (
-                    <Fragment key={item.id}>
-                      <tr>
-                        <td>
-                          <div style={{ display: "grid", gap: 4 }}>
-                            <b>{item.title}</b>
-                            <small className="breakLong">{item.id}</small>
+                    <Card key={item.id} className="border-border/80">
+                      <CardHeader className="gap-3">
+                        <div className="flex items-start justify-between gap-3">
+                          <div className="grid min-w-0 gap-1">
+                            <CardTitle className="text-base">{item.title}</CardTitle>
+                            <div className="breakLong text-sm text-muted-foreground">{item.id}</div>
                           </div>
-                        </td>
-                        <td>{formatCurrency(item.priceFrom ?? 0, item.currency)}</td>
-                        <td>{visible ? <span className="badge">Показано</span> : <span className="badge badge-muted">Скрыто</span>}</td>
-                        <td>
-                          <div className="rowActions">
-                            <button
-                              type="button"
-                              className="iconBtn iconBtn-secondary"
-                              aria-label="Выше"
-                              title="Выше"
-                              onClick={() => void swapProducts(index, index - 1)}
-                              disabled={!canMoveUp}
-                            >
-                              <ChevronUpIcon />
-                            </button>
-                            <button
-                              type="button"
-                              className="iconBtn iconBtn-secondary"
-                              aria-label="Ниже"
-                              title="Ниже"
-                              onClick={() => void swapProducts(index, index + 1)}
-                              disabled={!canMoveDown}
-                            >
-                              <ChevronDownIcon />
-                            </button>
-                            <button
-                              type="button"
-                              className="iconBtn iconBtn-secondary"
-                              aria-label="Изменить"
-                              title="Изменить"
-                              onClick={() => startEditProduct(item)}
-                            >
-                              <PencilIcon />
-                            </button>
-                            <button
-                              type="button"
-                              className="iconBtn iconBtn-secondary"
-                              aria-label={visible ? "Скрыть" : "Показать"}
-                              title={visible ? "Скрыть" : "Показать"}
-                              onClick={() => void onToggleProductVisibility(item)}
-                            >
-                              {visible ? <EyeOffIcon /> : <EyeIcon />}
-                            </button>
-                            <button
-                              type="button"
-                              className="iconBtn iconBtn-danger"
-                              aria-label="Удалить"
-                              title="Удалить"
-                              onClick={() => void onDeleteProduct(item)}
-                            >
-                              <TrashIcon />
-                            </button>
-                          </div>
-                        </td>
-                      </tr>
-
-                      {isEditing ? (
-                        <tr>
-                          <td colSpan={4}>{productEditor}</td>
-                        </tr>
-                      ) : null}
-                    </Fragment>
+                          {visible ? <ToneBadge tone="default">Показано</ToneBadge> : <ToneBadge tone="muted">Скрыто</ToneBadge>}
+                        </div>
+                      </CardHeader>
+                      <CardContent className="grid gap-4 pt-0">
+                        <div className="text-sm text-muted-foreground">Цена</div>
+                        <div className="text-lg font-semibold text-foreground">{formatCurrency(item.priceFrom ?? 0, item.currency)}</div>
+                        <div className="flex flex-wrap justify-end gap-2">
+                          <ActionIconButton aria-label="Выше" title="Выше" onClick={() => void swapProducts(index, index - 1)} disabled={!canMoveUp}>
+                            <ChevronUpIcon />
+                          </ActionIconButton>
+                          <ActionIconButton aria-label="Ниже" title="Ниже" onClick={() => void swapProducts(index, index + 1)} disabled={!canMoveDown}>
+                            <ChevronDownIcon />
+                          </ActionIconButton>
+                          <ActionIconButton aria-label="Изменить" title="Изменить" onClick={() => startEditProduct(item)}>
+                            <PencilIcon />
+                          </ActionIconButton>
+                          <ActionIconButton
+                            aria-label={visible ? "Скрыть" : "Показать"}
+                            title={visible ? "Скрыть" : "Показать"}
+                            onClick={() => void onToggleProductVisibility(item)}
+                          >
+                            {visible ? <EyeOffIcon /> : <EyeIcon />}
+                          </ActionIconButton>
+                          <ActionIconButton variant="destructive" aria-label="Удалить" title="Удалить" onClick={() => void onDeleteProduct(item)}>
+                            <TrashIcon />
+                          </ActionIconButton>
+                        </div>
+                        {isEditing ? productEditor : null}
+                      </CardContent>
+                    </Card>
                   );
                 })}
-              </tbody>
-            </table>
-          </div>
-        </div>
-      </section>
+              </div>
+
+              <div className="hidden lg:block">
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>Название</TableHead>
+                      <TableHead>Цена</TableHead>
+                      <TableHead>Статус</TableHead>
+                      <TableHead>Действия</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {productsOrdered.map((item, index) => {
+                      const visible = isVisible(item.active);
+                      const isEditing = editingProductId === item.id;
+                      const canMoveUp = !orderBusy && !hasMissingSortOrder && index > 0;
+                      const canMoveDown = !orderBusy && !hasMissingSortOrder && index < productsOrdered.length - 1;
+
+                      return (
+                        <Fragment key={item.id}>
+                          <TableRow>
+                            <TableCell>
+                              <div className="grid gap-1">
+                                <b>{item.title}</b>
+                                <small className="breakLong">{item.id}</small>
+                              </div>
+                            </TableCell>
+                            <TableCell>{formatCurrency(item.priceFrom ?? 0, item.currency)}</TableCell>
+                            <TableCell>
+                              {visible ? <ToneBadge tone="default">Показано</ToneBadge> : <ToneBadge tone="muted">Скрыто</ToneBadge>}
+                            </TableCell>
+                            <TableCell>
+                              <div className="flex flex-wrap gap-2">
+                                <ActionIconButton aria-label="Выше" title="Выше" onClick={() => void swapProducts(index, index - 1)} disabled={!canMoveUp}>
+                                  <ChevronUpIcon />
+                                </ActionIconButton>
+                                <ActionIconButton aria-label="Ниже" title="Ниже" onClick={() => void swapProducts(index, index + 1)} disabled={!canMoveDown}>
+                                  <ChevronDownIcon />
+                                </ActionIconButton>
+                                <ActionIconButton aria-label="Изменить" title="Изменить" onClick={() => startEditProduct(item)}>
+                                  <PencilIcon />
+                                </ActionIconButton>
+                                <ActionIconButton
+                                  aria-label={visible ? "Скрыть" : "Показать"}
+                                  title={visible ? "Скрыть" : "Показать"}
+                                  onClick={() => void onToggleProductVisibility(item)}
+                                >
+                                  {visible ? <EyeOffIcon /> : <EyeIcon />}
+                                </ActionIconButton>
+                                <ActionIconButton variant="destructive" aria-label="Удалить" title="Удалить" onClick={() => void onDeleteProduct(item)}>
+                                  <TrashIcon />
+                                </ActionIconButton>
+                              </div>
+                            </TableCell>
+                          </TableRow>
+                          {isEditing ? (
+                            <TableRow>
+                              <TableCell colSpan={4}>{productEditor}</TableCell>
+                            </TableRow>
+                          ) : null}
+                        </Fragment>
+                      );
+                    })}
+                  </TableBody>
+                </Table>
+              </div>
+            </div>
+          )}
+        </SectionCard>
+      </div>
     </AdminShell>
   );
 }

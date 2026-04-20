@@ -1,7 +1,8 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { signOut } from "firebase/auth";
+import { format } from "date-fns";
+import { ru } from "date-fns/locale";
 import { httpsCallable } from "firebase/functions";
 import {
   collection,
@@ -13,16 +14,24 @@ import {
   startAfter,
   where,
 } from "firebase/firestore";
-import { auth, db, functions as firebaseFunctions } from "../../lib/firebase";
+import { Calendar as CalendarIcon, ChartColumnIncreasing, X } from "lucide-react";
+import { db, functions as firebaseFunctions } from "../../lib/firebase";
 import { useAdminSession } from "../../components/AdminSessionProvider";
 import { AdminLoginScreen, LoadingScreen, MissingConfigScreen, NoAccessScreen } from "../../components/AdminScreens";
 import { AdminShell } from "../../components/AdminShell";
+import { EmptyState, FieldBlock, MetricCard, PageAlert, SectionCard, ToneBadge } from "../../components/admin-kit";
 import { BarTopChart, type BarDatum } from "../../components/charts/BarTopChart";
 import { ConversionAovChart, type ConversionAovPoint } from "../../components/charts/ConversionAovChart";
 import { PieBreakdownChart, type PieDatum } from "../../components/charts/PieBreakdownChart";
 import { PromoDailyChart, type PromoDailyPoint } from "../../components/charts/PromoDailyChart";
 import { TimeSeriesChart, type DailySeriesPoint } from "../../components/charts/TimeSeriesChart";
 import { DotDensityMap, type DotDensityPoint, type PlaceDot } from "../../components/geo/DotDensityMap";
+import { Badge } from "../../components/ui/badge";
+import { Button } from "../../components/ui/button";
+import { Calendar } from "../../components/ui/calendar";
+import { Input } from "../../components/ui/input";
+import { Popover, PopoverContent, PopoverTrigger } from "../../components/ui/popover";
+import { ToggleGroup, ToggleGroupItem } from "../../components/ui/toggle-group";
 import {
   type CalendarPreset,
   calendarPresetRangeKeys,
@@ -32,6 +41,7 @@ import {
   toDateKeyUTC,
   toMillis,
 } from "../../lib/analytics";
+import { dateKeyToLocalDate, localDateToDateKey } from "../../lib/date-pickers";
 import { matchKanevskyPlaceFromAddress } from "../../lib/geo/addressToKanevskyPlace";
 import { kanevskyDistrictBbox, kanevskyDistrictRing } from "../../lib/geo/kanevskyDistrict";
 import { kanevskyPlaces } from "../../lib/geo/kanevskyPlaces";
@@ -87,8 +97,10 @@ function formatDateKeyRangeLabel(startKey: string, endKey: string): string {
 type CalcAgg = {
   productType: Record<string, number>;
   doorSubtype: Record<string, number>;
+  profileModel: Record<string, number>;
   profileSeries: Record<string, number>;
   glazing: Record<string, number>;
+  glassOptions: Record<string, number>;
   lamination: Record<string, number>;
   laminationGroup: Record<string, number>;
   laminationColor: Record<string, number>;
@@ -102,18 +114,39 @@ type CalcAgg = {
   };
 };
 
+type ProductViewsAggItem = {
+  productId: string;
+  views: number;
+  title?: string;
+  image?: string;
+};
+
+type ProductViewsAgg = {
+  viewsTotal: number;
+  byId: Record<string, ProductViewsAggItem>;
+};
+
 function emptyCalcAgg(): CalcAgg {
   return {
     productType: {},
     doorSubtype: {},
+    profileModel: {},
     profileSeries: {},
     glazing: {},
+    glassOptions: {},
     lamination: {},
     laminationGroup: {},
     laminationColor: {},
     designOption: {},
     options: {},
     services: { installEnabledCount: 0, deliveryEnabledCount: 0, deliveryKmSum: 0, deliveryKmCount: 0 },
+  };
+}
+
+function emptyProductViewsAgg(): ProductViewsAgg {
+  return {
+    viewsTotal: 0,
+    byId: {},
   };
 }
 
@@ -153,12 +186,32 @@ function normalizeDoorSubtype(raw: string): "balcony" | "entrance" | "interior" 
   return "other";
 }
 
-function normalizeProfileSeries(raw: string): "bautex" | "kbe" | "rehau" | "other" {
+function normalizeProfileSeries(raw: string): "bautex" | "kbe" | "rehau" | "kommerling" | "other" {
   if (!raw) return "other";
   if (raw === "budget") return "bautex";
   if (raw === "standard") return "kbe";
   if (raw === "premium") return "rehau";
-  if (raw === "bautex" || raw === "kbe" || raw === "rehau") return raw;
+  if (raw === "bautex" || raw === "kbe" || raw === "rehau" || raw === "kommerling") return raw;
+  return "other";
+}
+
+function normalizeProfileModel(raw: string): string {
+  return raw.trim().toLowerCase() || "other";
+}
+
+const ANALYTICS_GLASS_OPTION_KEYS = new Set<string>([
+  "energysaving",
+  "multifunctional",
+]);
+
+function normalizeGlassOptionKey(raw: string): string {
+  const normalized = raw.trim().toLowerCase().replace(/[_\-\s]/g, "");
+  if (!normalized) return "other";
+  if (ANALYTICS_GLASS_OPTION_KEYS.has(normalized)) {
+    if (normalized === "energysaving") return "energySaving";
+    if (normalized === "multifunctional") return "multiFunctional";
+    return normalized;
+  }
   return "other";
 }
 
@@ -226,6 +279,26 @@ function sumMapValues(map: Record<string, number>): number {
   return Object.values(map).reduce((acc, value) => acc + (Number.isFinite(value) ? value : 0), 0);
 }
 
+function accumulateProductViewsAggFromAnalytics(agg: ProductViewsAgg, rawProducts: unknown): void {
+  if (!isRecord(rawProducts)) return;
+
+  agg.viewsTotal += coerceNumber(rawProducts.viewsTotal);
+
+  const rawById = isRecord(rawProducts.byId) ? rawProducts.byId : {};
+  for (const [productId, rawEntry] of Object.entries(rawById)) {
+    if (!isRecord(rawEntry)) continue;
+    const views = coerceNumber(rawEntry.views);
+    if (!views) continue;
+    const title = typeof rawEntry.title === "string" ? rawEntry.title.trim() : "";
+    const image = typeof rawEntry.image === "string" ? rawEntry.image.trim() : "";
+    const current = agg.byId[productId] ?? { productId, views: 0 };
+    current.views += views;
+    if (title) current.title = title;
+    if (image) current.image = image;
+    agg.byId[productId] = current;
+  }
+}
+
 function extractQuoteCalcInputs(quote: Quote): Record<string, unknown>[] {
   const fromItems: Record<string, unknown>[] = [];
   if (Array.isArray(quote.items)) {
@@ -260,8 +333,21 @@ function buildCalcAggFromQuotes(quotes: Quote[]): CalcAgg {
         bump(agg.doorSubtype, normalizeDoorSubtype(normalizeKey(input.doorSubtype)));
       }
 
+      const profileModelRaw = normalizeKey(input.profileModel);
+      if (profileModelRaw) {
+        bump(agg.profileModel, normalizeProfileModel(profileModelRaw));
+      }
       bump(agg.profileSeries, normalizeProfileSeries(normalizeKey(input.profileSeries)));
       bump(agg.glazing, normalizeGlazing(normalizeKey(input.glazing)));
+      const glassOptionsRaw = input.glassOptions;
+      if (isRecord(glassOptionsRaw)) {
+        for (const [key, value] of Object.entries(glassOptionsRaw)) {
+          if (value !== true) continue;
+          const normalizedKey = normalizeGlassOptionKey(key);
+          if (normalizedKey === "other") continue;
+          bump(agg.glassOptions, normalizedKey);
+        }
+      }
       const lamination = normalizeLamination(normalizeKey(input.lamination));
       bump(agg.lamination, lamination);
       bump(agg.designOption, normalizeDesignOption(input));
@@ -375,8 +461,10 @@ function accumulateCalcAggFromAnalytics(agg: CalcAgg, rawCalc: unknown): void {
   if (!isRecord(rawCalc)) return;
   sumNumberMap(agg.productType, rawCalc.productType);
   sumNumberMap(agg.doorSubtype, rawCalc.doorSubtype);
+  sumNumberMap(agg.profileModel, rawCalc.profileModel);
   sumNumberMap(agg.profileSeries, rawCalc.profileSeries);
   sumNumberMap(agg.glazing, rawCalc.glazing);
+  sumNumberMap(agg.glassOptions, rawCalc.glassOptions);
   sumNumberMap(agg.lamination, rawCalc.lamination);
   sumNumberMap(agg.laminationGroup, rawCalc.laminationGroup);
   sumNumberMap(agg.laminationColor, rawCalc.laminationColor);
@@ -395,8 +483,8 @@ function accumulateCalcAggFromAnalytics(agg: CalcAgg, rawCalc: unknown): void {
 async function fetchDailyAnalyticsRange(
   startKey: string,
   endKey: string
-): Promise<{ series: DailySeriesPoint[]; calcAgg: CalcAgg; hasDocs: boolean }> {
-  if (!db) return { series: [], calcAgg: emptyCalcAgg(), hasDocs: false };
+): Promise<{ series: DailySeriesPoint[]; calcAgg: CalcAgg; siteVisits: number; productViewsAgg: ProductViewsAgg; hasDocs: boolean }> {
+  if (!db) return { series: [], calcAgg: emptyCalcAgg(), siteVisits: 0, productViewsAgg: emptyProductViewsAgg(), hasDocs: false };
   const snap = await getDocs(
     query(
       collection(db, "analytics_daily"),
@@ -408,6 +496,8 @@ async function fetchDailyAnalyticsRange(
 
   const byKey = new Map<string, DailySeriesPoint>();
   const calcAgg = emptyCalcAgg();
+  const productViewsAgg = emptyProductViewsAgg();
+  let siteVisits = 0;
   for (const docRef of snap.docs) {
     const data = docRef.data() as Record<string, unknown>;
     byKey.set(docRef.id, {
@@ -417,11 +507,63 @@ async function fetchDailyAnalyticsRange(
       revenue: coerceNumber(data.revenue),
     });
     accumulateCalcAggFromAnalytics(calcAgg, data.calc);
+    siteVisits += coerceNumber(isRecord(data.site) ? data.site.visits : 0);
+    accumulateProductViewsAggFromAnalytics(productViewsAgg, data.products);
   }
 
   const keys = dateKeyRange(startKey, endKey);
   const series = keys.map((key) => byKey.get(key) ?? { dateKey: key, leads: 0, confirmed: 0, revenue: 0 });
-  return { series, calcAgg, hasDocs: snap.docs.length > 0 };
+  return { series, calcAgg, siteVisits, productViewsAgg, hasDocs: snap.docs.length > 0 };
+}
+
+async function fetchSiteVisitsRange(startKey: string, endKey: string): Promise<number> {
+  if (!db) return 0;
+  const snap = await getDocs(
+    query(
+      collection(db, "analytics_site_daily"),
+      where("dayKey", ">=", startKey),
+      where("dayKey", "<=", endKey),
+      orderBy("dayKey", "asc")
+    )
+  );
+
+  return snap.docs.reduce((sum, docRef) => {
+    const data = docRef.data() as Record<string, unknown>;
+    return sum + coerceNumber(data.visits);
+  }, 0);
+}
+
+async function fetchProductViewsRange(startKey: string, endKey: string): Promise<ProductViewsAgg> {
+  if (!db) return emptyProductViewsAgg();
+
+  const snap = await getDocs(
+    query(
+      collection(db, "analytics_product_daily"),
+      where("dayKey", ">=", startKey),
+      where("dayKey", "<=", endKey),
+      orderBy("dayKey", "asc")
+    )
+  );
+
+  const agg = emptyProductViewsAgg();
+  for (const docRef of snap.docs) {
+    const data = docRef.data() as Record<string, unknown>;
+    const productId = typeof data.productId === "string" ? data.productId.trim() : "";
+    const views = coerceNumber(data.views);
+    if (!productId || !views) continue;
+
+    agg.viewsTotal += views;
+
+    const current = agg.byId[productId] ?? { productId, views: 0 };
+    current.views += views;
+    const title = typeof data.title === "string" ? data.title.trim() : "";
+    const image = typeof data.image === "string" ? data.image.trim() : "";
+    if (title) current.title = title;
+    if (image) current.image = image;
+    agg.byId[productId] = current;
+  }
+
+  return agg;
 }
 
 function buildFallbackDailySeries(startKey: string, endKey: string, quotes: Quote[]): DailySeriesPoint[] {
@@ -546,12 +688,35 @@ const PROFILE_SERIES_LABELS: Record<string, string> = {
   bautex: "Bautex",
   kbe: "KBE",
   rehau: "Rehau",
+  kommerling: "Kommerling",
+  other: "Другое/не указано",
+};
+
+const PROFILE_MODEL_LABELS: Record<string, string> = {
+  bautex_58: "Bautex 58",
+  kbe_58: "KBE 58",
+  kbe_expert_70: "KBE Expert 70",
+  kbe_76: "KBE 76",
+  rehau_blitz_new: "Rehau Blitz New",
+  rehau_thermo_design: "Rehau Thermo-Design",
+  rehau_grazio: "Rehau Grazio",
+  rehau_delight_design: "Rehau Delight-Design",
+  rehau_intelio: "Rehau Intelio",
+  rehau_geneo: "Rehau Geneo",
+  kommerling_70_ad: "Kommerling 70 AD",
+  kommerling_76_ad: "Kommerling 76 AD",
   other: "Другое/не указано",
 };
 
 const GLAZING_LABELS: Record<string, string> = {
   single: "Однокамерный",
   double: "Двухкамерный",
+  other: "Другое/не указано",
+};
+
+const GLASS_OPTION_LABELS: Record<string, string> = {
+  energySaving: "Энергосберегающий стеклопакет",
+  multiFunctional: "Мультифункциональный стеклопакет",
   other: "Другое/не указано",
 };
 
@@ -714,6 +879,8 @@ export default function AnalyticsPage(): JSX.Element {
 
   const [dailySeries, setDailySeries] = useState<DailySeriesPoint[]>([]);
   const [dailySource, setDailySource] = useState<"analytics_daily" | "quotes_fallback">("analytics_daily");
+  const [siteVisits, setSiteVisits] = useState(0);
+  const [productViewsAgg, setProductViewsAgg] = useState<ProductViewsAgg>(() => emptyProductViewsAgg());
 
   const [quotesTruncated, setQuotesTruncated] = useState(false);
 
@@ -845,6 +1012,8 @@ export default function AnalyticsPage(): JSX.Element {
     if (!rangeKeys) return 0;
     return dateKeyRange(rangeKeys.startKey, rangeKeys.endKey).length;
   }, [rangeKeys]);
+  const customFromDate = useMemo(() => dateKeyToLocalDate(customFrom), [customFrom]);
+  const customToDate = useMemo(() => dateKeyToLocalDate(customTo), [customTo]);
 
   const canBackfill = rangeDays > 0 && rangeDays <= 31;
 
@@ -861,17 +1030,23 @@ export default function AnalyticsPage(): JSX.Element {
     setQuotesTruncated(false);
     setCalcAgg(emptyCalcAgg());
     setCalcSource("analytics_daily");
+    setSiteVisits(0);
+    setProductViewsAgg(emptyProductViewsAgg());
     setPromoTruncated(false);
     setPromoDailyByCurrency({});
 
     try {
-      const [dailyResult, promoResult] = await Promise.all([
+      const [dailyResult, promoResult, siteVisitsResult, productViewsResult] = await Promise.all([
         fetchDailyAnalyticsRange(rangeKeys.startKey, rangeKeys.endKey).catch(() => ({
           series: [],
           calcAgg: emptyCalcAgg(),
+          siteVisits: 0,
+          productViewsAgg: emptyProductViewsAgg(),
           hasDocs: false,
         })),
         fetchAllPromoUsagesInRange(rangeMs.startMs, rangeMs.endMsExclusive),
+        fetchSiteVisitsRange(rangeKeys.startKey, rangeKeys.endKey).catch(() => 0),
+        fetchProductViewsRange(rangeKeys.startKey, rangeKeys.endKey).catch(() => emptyProductViewsAgg()),
       ]);
 
       let quotesCache: Quote[] = [];
@@ -895,6 +1070,8 @@ export default function AnalyticsPage(): JSX.Element {
 
       setDailySource(resolvedDailySource);
       setDailySeries(resolvedDailySeries);
+      setSiteVisits(siteVisitsResult);
+      setProductViewsAgg(productViewsResult);
       setQuotesTruncated(quotesWasTruncated);
 
 	      const calcTotal = sumMapValues(dailyResult.calcAgg.productType);
@@ -1143,6 +1320,10 @@ export default function AnalyticsPage(): JSX.Element {
     () => withPieColors(toPieData(calcAgg.doorSubtype, DOOR_SUBTYPE_LABELS), DOOR_SUBTYPE_COLORS),
     [calcAgg.doorSubtype]
   );
+  const calcProfileModelPie = useMemo(
+    () => withPieColors(toPieData(calcAgg.profileModel, PROFILE_MODEL_LABELS), PROFILE_SERIES_COLORS),
+    [calcAgg.profileModel]
+  );
   const calcProfileSeriesPie = useMemo(
     () => withPieColors(toPieData(calcAgg.profileSeries, PROFILE_SERIES_LABELS), PROFILE_SERIES_COLORS),
     [calcAgg.profileSeries]
@@ -1150,6 +1331,21 @@ export default function AnalyticsPage(): JSX.Element {
   const calcGlazingPie = useMemo(
     () => withPieColors(toPieData(calcAgg.glazing, GLAZING_LABELS), GLAZING_COLORS),
     [calcAgg.glazing]
+  );
+  const calcGlassOptionsPie = useMemo(
+    () =>
+      withPieColors(
+        toPieData(
+          Object.fromEntries(
+            Object.entries(calcAgg.glassOptions).filter(
+              ([key]) => key === "energySaving" || key === "multiFunctional"
+            )
+          ),
+          GLASS_OPTION_LABELS
+        ),
+        GLAZING_COLORS
+      ),
+    [calcAgg.glassOptions]
   );
   const calcLaminationColorPie = useMemo(
     () => withPieColors(toPieData(calcAgg.laminationColor, LAMINATION_COLOR_LABELS), LAMINATION_COLOR_COLORS),
@@ -1181,6 +1377,29 @@ export default function AnalyticsPage(): JSX.Element {
     return calcAgg.services.deliveryKmSum / calcAgg.services.deliveryKmCount;
   }, [calcAgg.services.deliveryKmCount, calcAgg.services.deliveryKmSum]);
 
+  const topViewedProducts = useMemo(
+    () =>
+      Object.values(productViewsAgg.byId)
+        .filter((item) => item.views > 0)
+        .sort((a, b) => {
+          if (b.views !== a.views) return b.views - a.views;
+          const aLabel = (a.title ?? a.productId).toLowerCase();
+          const bLabel = (b.title ?? b.productId).toLowerCase();
+          return aLabel.localeCompare(bLabel, "ru");
+        })
+        .slice(0, 10),
+    [productViewsAgg.byId]
+  );
+
+  const topViewedProductsBar = useMemo<BarDatum[]>(
+    () =>
+      topViewedProducts.map((item) => ({
+        name: item.title || item.productId,
+        value: item.views,
+      })),
+    [topViewedProducts]
+  );
+
   if (session.status === "loading") return <LoadingScreen />;
   if (session.status === "missing_config") return <MissingConfigScreen />;
   if (session.status === "signed_out") return <AdminLoginScreen title="Статистика" subtitle="Войдите под админским аккаунтом" />;
@@ -1190,338 +1409,374 @@ export default function AnalyticsPage(): JSX.Element {
     <AdminShell
       title="Статистика"
       subtitle={session.user?.email ?? ""}
-      rightActions={
-        <>
-          <button className="secondary" onClick={() => void loadAll()} disabled={loading || (preset === "all_time" && allTimeLoading)}>
-            {loading ? "Загрузка..." : "Обновить"}
-          </button>
-          <button onClick={() => void signOut(auth!)} disabled={!auth}>
-            Выйти
-          </button>
-        </>
-      }
     >
-      <section className="card" style={{ display: "grid", gap: 12 }}>
-        <h2>Период</h2>
-        <div className="rowActions" style={{ justifyContent: "space-between" }}>
-          <div className="rowActions">
+      <SectionCard
+        eyebrow="Период"
+        title="Окно анализа"
+        description="Все графики и агрегаты пересчитываются для выбранного интервала. Даты интерпретируются в UTC."
+        icon={ChartColumnIncreasing}
+        tone="cyan"
+        actions={<Badge variant="outline">{rangeLabel}</Badge>}
+      >
+        <div className="grid gap-4">
+          <div className="flex flex-wrap gap-2">
             {presets.map((item) => (
-              <button
+              <Button
                 key={item.key}
                 type="button"
-                className={`secondary small ${preset === item.key ? "adminNavLink-active" : ""}`}
+                size="sm"
+                variant={preset === item.key ? "default" : "outline"}
                 onClick={() => setPreset(item.key)}
               >
                 {item.label}
-              </button>
+              </Button>
             ))}
           </div>
-          <small>{rangeLabel}</small>
-        </div>
 
-        {preset === "custom" ? (
-          <div className="grid cols-2" style={{ gap: 12 }}>
-            <label className="field">
-              <span className="fieldLabel">С</span>
-              <input type="date" value={customFrom} onChange={(e) => setCustomFrom(e.target.value)} />
-            </label>
-            <label className="field">
-              <span className="fieldLabel">По</span>
-              <input type="date" value={customTo} onChange={(e) => setCustomTo(e.target.value)} />
-            </label>
+          {preset === "custom" ? (
+            <div className="grid gap-4 md:grid-cols-2">
+              <FieldBlock label="С">
+                <div className="flex min-w-0 items-center gap-2">
+                  <Popover>
+                    <PopoverTrigger asChild>
+                      <Button
+                        type="button"
+                        variant="outline"
+                        data-empty={!customFromDate || undefined}
+                        className="w-full justify-start text-left font-normal data-[empty=true]:text-muted-foreground"
+                      >
+                        <CalendarIcon data-icon="inline-start" />
+                        {customFromDate ? <span>{format(customFromDate, "PPP", { locale: ru })}</span> : <span>Выберите дату</span>}
+                      </Button>
+                    </PopoverTrigger>
+                    <PopoverContent align="start" className="w-auto overflow-hidden p-0">
+                      <Calendar
+                        mode="single"
+                        selected={customFromDate}
+                        onSelect={(date) => {
+                          if (!date) return;
+                          setCustomFrom(localDateToDateKey(date));
+                        }}
+                        className="rounded-lg"
+                      />
+                    </PopoverContent>
+                  </Popover>
+                  {customFrom ? (
+                    <Button type="button" size="icon" variant="outline" aria-label="Очистить дату начала" onClick={() => setCustomFrom("")}>
+                      <X />
+                    </Button>
+                  ) : null}
+                </div>
+              </FieldBlock>
+              <FieldBlock label="По">
+                <div className="flex min-w-0 items-center gap-2">
+                  <Popover>
+                    <PopoverTrigger asChild>
+                      <Button
+                        type="button"
+                        variant="outline"
+                        data-empty={!customToDate || undefined}
+                        className="w-full justify-start text-left font-normal data-[empty=true]:text-muted-foreground"
+                      >
+                        <CalendarIcon data-icon="inline-start" />
+                        {customToDate ? <span>{format(customToDate, "PPP", { locale: ru })}</span> : <span>Выберите дату</span>}
+                      </Button>
+                    </PopoverTrigger>
+                    <PopoverContent align="start" className="w-auto overflow-hidden p-0">
+                      <Calendar
+                        mode="single"
+                        selected={customToDate}
+                        onSelect={(date) => {
+                          if (!date) return;
+                          setCustomTo(localDateToDateKey(date));
+                        }}
+                        className="rounded-lg"
+                      />
+                    </PopoverContent>
+                  </Popover>
+                  {customTo ? (
+                    <Button type="button" size="icon" variant="outline" aria-label="Очистить дату конца" onClick={() => setCustomTo("")}>
+                      <X />
+                    </Button>
+                  ) : null}
+                </div>
+              </FieldBlock>
+            </div>
+          ) : null}
+
+          <div className="flex flex-wrap items-center justify-between gap-3 text-sm text-muted-foreground">
+            <div>{lastUpdatedAt ? `Обновлено: ${lastUpdatedAt.toLocaleString("ru-RU")}` : ""}</div>
+            {rangeDays ? <div>Дней: {rangeDays}</div> : null}
           </div>
-        ) : null}
 
-        <div className="filtersFooter">
-          <small>{lastUpdatedAt ? `Обновлено: ${lastUpdatedAt.toLocaleString("ru-RU")}` : ""}</small>
-        </div>
-
-        {dailySource === "analytics_daily" ? (
-          <div className="rowActions" style={{ justifyContent: "space-between" }}>
-            <div className="rowActions">
-              <button
+          {dailySource === "analytics_daily" ? (
+            <div className="flex flex-wrap items-center gap-3">
+              <Button
                 type="button"
-                className="secondary small"
+                variant="outline"
+                size="sm"
                 onClick={() => void runBackfill()}
                 disabled={!firebaseFunctions || backfillRunning || !canBackfill}
                 title={canBackfill ? "Заполнить calc.* в analytics_daily за период" : "Backfill доступен только до 31 дня"}
               >
                 {backfillRunning ? "Backfill..." : "Backfill calc.*"}
-              </button>
-              {!canBackfill ? <small>Доступно до 31 дня.</small> : null}
+              </Button>
+              {!canBackfill ? <ToneBadge tone="muted">Доступно до 31 дня</ToneBadge> : null}
               {backfillInfo ? (
-                <small>
-                  Готово: дней <b>{backfillInfo.updatedDays}</b>, заявок <b>{backfillInfo.processedQuotes}</b>
-                </small>
+                <ToneBadge tone="success">
+                  Готово: {backfillInfo.updatedDays} дней, {backfillInfo.processedQuotes} заявок
+                </ToneBadge>
               ) : null}
-              {backfillError ? <small className="noticeText-danger">{backfillError}</small> : null}
+              {backfillError ? <PageAlert title="Ошибка backfill" description={backfillError} className="w-full" /> : null}
             </div>
-            <small>{rangeDays ? `Дней: ${rangeDays}` : ""}</small>
-          </div>
-        ) : null}
+          ) : null}
 
-        {quotesTruncated ? (
-          <div className="errorBox noticeCard">
-            Загружено только {MAX_QUOTES.toLocaleString("ru-RU")} заявок за период. Графики/метрики на основе <b>quotes</b> могут быть неточны — уменьшите период.
-          </div>
-        ) : null}
+          {quotesTruncated ? (
+            <PageAlert
+              title="Данные по заявкам усечены"
+              description={
+                <>
+                  Загружено только {MAX_QUOTES.toLocaleString("ru-RU")} заявок за период. Метрики на основе <b>quotes</b> могут быть неточны.
+                </>
+              }
+              variant="warning"
+            />
+          ) : null}
 
-        {promoTruncated ? (
-          <div className="errorBox noticeCard">
-            Загружено только {MAX_PROMO_USAGES.toLocaleString("ru-RU")} записей promo_usages за период. Уменьшите период для точных данных.
-          </div>
-        ) : null}
-      </section>
-
-      {loadError ? (
-        <section className="card noticeCard noticeCard-error">
-          <h3 style={{ marginBottom: 6 }}>Ошибка</h3>
-          <small className="noticeText-danger">{loadError}</small>
-        </section>
-      ) : null}
-
-      <section className="card" style={{ display: "grid", gap: 10 }}>
-        <h2>Сводка</h2>
-        <div className="kpiGrid">
-          <div className="kpiCard kpiTone-cyan">
-            <small className="kpiLabel">Заявки</small>
-            <div className="kpiValue">{dailyTotals.leads.toLocaleString("ru-RU")}</div>
-          </div>
-          <div className="kpiCard kpiTone-green">
-            <small className="kpiLabel">Подтверждено</small>
-            <div className="kpiValue">{dailyTotals.confirmed.toLocaleString("ru-RU")}</div>
-          </div>
-          <div className="kpiCard kpiTone-magenta">
-            <small className="kpiLabel">Выручка</small>
-            <div className="kpiValue">{dailyTotals.revenue.toLocaleString("ru-RU")}</div>
-          </div>
-          <div className="kpiCard kpiTone-blue">
-            <small className="kpiLabel">Конверсия</small>
-            <div className="kpiValue">{dailyTotals.conversionPct.toFixed(1)}%</div>
-          </div>
-          <div className="kpiCard kpiTone-orange">
-            <small className="kpiLabel">Средний чек</small>
-            <div className="kpiValue">{dailyTotals.aov.toLocaleString("ru-RU")}</div>
-          </div>
+          {promoTruncated ? (
+            <PageAlert
+              title="Данные по promo_usages усечены"
+              description={`Загружено только ${MAX_PROMO_USAGES.toLocaleString("ru-RU")} записей promo_usages. Уменьшите период для точных данных.`}
+              variant="warning"
+            />
+          ) : null}
         </div>
-        <small className="chartHint">UTC. Конверсия = confirmed/leads в тот же день.</small>
-      </section>
+      </SectionCard>
 
-      <section className="card" style={{ padding: 12 }}>
-        <div className="rowActions" aria-label="Раздел статистики">
-          <button
-            type="button"
-            className={`secondary small ${activeTab === "general" ? "adminNavLink-active" : ""}`}
-            onClick={() => setActiveTab("general")}
-          >
+      {loadError ? <PageAlert title="Ошибка загрузки аналитики" description={loadError} /> : null}
+
+      <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4 2xl:grid-cols-7">
+        <MetricCard label="Заявки" value={dailyTotals.leads.toLocaleString("ru-RU")} />
+        <MetricCard label="Подтверждено" value={dailyTotals.confirmed.toLocaleString("ru-RU")} />
+        <MetricCard label="Выручка" value={dailyTotals.revenue.toLocaleString("ru-RU")} />
+        <MetricCard label="Конверсия" value={`${dailyTotals.conversionPct.toFixed(1)}%`} />
+        <MetricCard label="Средний чек" value={dailyTotals.aov.toLocaleString("ru-RU")} description="UTC. Конверсия = confirmed/leads в тот же день." />
+        <MetricCard label="Заходы на сайт" value={siteVisits.toLocaleString("ru-RU")} description="Уникальные сессии по 30-минутному окну." />
+        <MetricCard label="Просмотры товаров" value={productViewsAgg.viewsTotal.toLocaleString("ru-RU")} description="Открытия карточек товаров за выбранный период." />
+      </div>
+
+      <SectionCard
+        eyebrow="Раздел"
+        title="Витрины аналитики"
+        description="Переключение между общими, промо-, калькуляторными и гео-отчётами."
+        icon={ChartColumnIncreasing}
+        tone="cyan"
+      >
+        <ToggleGroup
+          type="single"
+          value={activeTab}
+          onValueChange={(next) => {
+            if (next) setActiveTab(next as AnalyticsTab);
+          }}
+          variant="outline"
+          size="sm"
+          className="flex w-full flex-wrap gap-2"
+          aria-label="Раздел статистики"
+        >
+          <ToggleGroupItem value="general">
             Общее
-          </button>
-          <button
-            type="button"
-            className={`secondary small ${activeTab === "promo" ? "adminNavLink-active" : ""}`}
-            onClick={() => setActiveTab("promo")}
-          >
+          </ToggleGroupItem>
+          <ToggleGroupItem value="promo">
             Промокоды
-          </button>
-          <button
-            type="button"
-            className={`secondary small ${activeTab === "calc" ? "adminNavLink-active" : ""}`}
-            onClick={() => setActiveTab("calc")}
-          >
+          </ToggleGroupItem>
+          <ToggleGroupItem value="calc">
             Калькулятор
-          </button>
-          <button
-            type="button"
-            className={`secondary small ${activeTab === "geo" ? "adminNavLink-active" : ""}`}
-            onClick={() => setActiveTab("geo")}
-          >
+          </ToggleGroupItem>
+          <ToggleGroupItem value="geo">
             География
-          </button>
-        </div>
-      </section>
+          </ToggleGroupItem>
+        </ToggleGroup>
+      </SectionCard>
 
       {activeTab === "general" ? (
-        <section className="chartsGrid">
-          <section className="card chartCard chartPanel">
-            <div className="chartTitle">
-              <h3>Заявки / Подтверждения / Выручка</h3>
-              <small className="chartHint">По дням (UTC)</small>
-            </div>
+        <div className="grid gap-6 xl:grid-cols-2">
+          <SectionCard title="Заявки / Подтверждения / Выручка" description="По дням (UTC).">
             <TimeSeriesChart data={dailySeries} />
-          </section>
-
-          <section className="card chartCard chartPanel">
-            <div className="chartTitle">
-              <h3>Конверсия / Средний чек</h3>
-              <small className="chartHint">По дням (UTC)</small>
-            </div>
+          </SectionCard>
+          <SectionCard title="Конверсия / Средний чек" description="По дням (UTC).">
             <ConversionAovChart data={conversionAovSeries} />
-          </section>
-        </section>
+          </SectionCard>
+          <SectionCard
+            title="Топ товаров по просмотрам"
+            description={`Просмотры карточек товаров за период: ${productViewsAgg.viewsTotal.toLocaleString("ru-RU")}`}
+            className="xl:col-span-2"
+          >
+            <div className="grid gap-4">
+              <div className="flex flex-wrap gap-2">
+                <ToneBadge tone="outline">Заходы на сайт: {siteVisits.toLocaleString("ru-RU")}</ToneBadge>
+                <ToneBadge tone="outline">Товаров в рейтинге: {topViewedProducts.length.toLocaleString("ru-RU")}</ToneBadge>
+              </div>
+              {topViewedProductsBar.length ? (
+                <BarTopChart data={topViewedProductsBar} valueLabel="просм." />
+              ) : (
+                <EmptyState title="Нет просмотров товаров" description="Карточки товаров за выбранный период еще не открывали." />
+              )}
+            </div>
+          </SectionCard>
+        </div>
       ) : null}
 
       {activeTab === "promo" ? (
-        <section className="chartsGrid">
-          <section className="card chartCard chartPanel">
-            <div className="chartTitle">
-              <h3>По дням</h3>
-              <small className="chartHint">
-              Использования + сумма скидок ({promoDailyCurrency || "—"}). UTC.
-              </small>
+        <div className="grid gap-6 xl:grid-cols-2">
+          <SectionCard title="По дням" description={`Использования и сумма скидок (${promoDailyCurrency || "—"}), UTC.`}>
+            <div className="grid gap-4">
+              {promoDailyCurrencies.length > 1 ? (
+                <div className="flex flex-wrap gap-2">
+                  {promoDailyCurrencies.map((currency) => (
+                    <Button
+                      key={currency}
+                      type="button"
+                      size="sm"
+                      variant={promoDailyCurrency === currency ? "default" : "outline"}
+                      onClick={() => setPromoDailyCurrency(currency)}
+                    >
+                      {currency}
+                    </Button>
+                  ))}
+                </div>
+              ) : null}
+              {promoDailySeries.length ? (
+                <PromoDailyChart data={promoDailySeries} discountCurrency={promoDailyCurrency} />
+              ) : (
+                <EmptyState title="Нет использований промокодов" description="За выбранный период записи не найдены." />
+              )}
             </div>
-            {promoDailyCurrencies.length > 1 ? (
-              <div className="rowActions" style={{ marginTop: 6 }}>
-                {promoDailyCurrencies.map((currency) => (
-                  <button
-                    key={currency}
-                    type="button"
-                    className={`secondary small ${promoDailyCurrency === currency ? "adminNavLink-active" : ""}`}
-                    onClick={() => setPromoDailyCurrency(currency)}
-                  >
-                    {currency}
-                  </button>
-                ))}
-              </div>
-            ) : null}
-            {promoDailySeries.length ? (
-              <PromoDailyChart data={promoDailySeries} discountCurrency={promoDailyCurrency} />
-            ) : (
-              <small>Нет использований промокодов за период.</small>
-            )}
-          </section>
+          </SectionCard>
 
-          <section className="card chartCard chartPanel">
-            <h3>Топ по использованиям</h3>
-            <small>
-              Всего использований: <b>{promoTotals.uses.toLocaleString("ru-RU")}</b>
-            </small>
-            {promoTopUses.length ? <BarTopChart data={promoTopUses} valueLabel="исп." /> : <small>Нет данных.</small>}
-          </section>
+          <SectionCard
+            title="Топ по использованиям"
+            description={`Всего использований: ${promoTotals.uses.toLocaleString("ru-RU")}`}
+          >
+            {promoTopUses.length ? <BarTopChart data={promoTopUses} valueLabel="исп." /> : <EmptyState title="Нет данных" />}
+          </SectionCard>
 
-          <section className="card chartCard chartPanel" style={{ gridColumn: "1 / -1" }}>
-            <h3>Топ по сумме скидок</h3>
-            {promoCurrencies.length ? (
-              <div className="pillList">
-                {promoCurrencies.map((currency) => (
-                  <span key={currency} className="pill">
-                    {currency}: {promoTotals.discountByCurrency[currency]?.toLocaleString("ru-RU") ?? 0}
-                  </span>
-                ))}
-              </div>
-            ) : (
-              <small>Нет данных по скидкам за период.</small>
-            )}
+          <SectionCard title="Топ по сумме скидок" description="Сводка по валютам и лидерам каждой валютной группы." className="xl:col-span-2">
+            <div className="grid gap-4">
+              {promoCurrencies.length ? (
+                <div className="flex flex-wrap gap-2">
+                  {promoCurrencies.map((currency) => (
+                    <ToneBadge key={currency} tone="outline">
+                      {currency}: {promoTotals.discountByCurrency[currency]?.toLocaleString("ru-RU") ?? 0}
+                    </ToneBadge>
+                  ))}
+                </div>
+              ) : (
+                <EmptyState title="Нет данных по скидкам" />
+              )}
 
-            {promoCurrencies.map((currency) => (
-              <div key={currency} style={{ marginTop: 12 }}>
-                <h4 style={{ marginBottom: 8 }}>{currency}</h4>
-                {promoTopDiscountByCurrency[currency]?.length ? (
-                  <BarTopChart data={promoTopDiscountByCurrency[currency]} valueLabel={currency} />
-                ) : (
-                  <small>Нет скидок в валюте {currency}.</small>
-                )}
-              </div>
-            ))}
-          </section>
-        </section>
+              {promoCurrencies.map((currency) => (
+                <div key={currency} className="grid gap-3 rounded-2xl border border-border/70 bg-background/70 p-4">
+                  <div className="text-base font-semibold">{currency}</div>
+                  {promoTopDiscountByCurrency[currency]?.length ? (
+                    <BarTopChart data={promoTopDiscountByCurrency[currency]} valueLabel={currency} />
+                  ) : (
+                    <div className="text-sm text-muted-foreground">Нет скидок в валюте {currency}.</div>
+                  )}
+                </div>
+              ))}
+            </div>
+          </SectionCard>
+        </div>
       ) : null}
 
       {activeTab === "geo" ? (
-        <section className="chartsGrid">
-          <div className="geoGrid">
-            <section className="card chartCard chartPanel geoMapPanel">
-              <div className="chartTitle">
-                <h3>Каневской район</h3>
-                <small className="chartHint">Карта заказов по адресу (quotes.address)</small>
+        <div className="grid gap-6 xl:grid-cols-[minmax(0,1.8fr)_minmax(320px,0.9fr)]">
+          <SectionCard title="Каневской район" description="Карта заказов по адресу из `quotes.address`.">
+            {!rangeMs ? (
+              <EmptyState title="Неверный период" description="Укажите даты в формате YYYY-MM-DD." />
+            ) : geoLoading ? (
+              <EmptyState title="Загрузка..." />
+            ) : geoError ? (
+              <PageAlert title="Ошибка гео-аналитики" description={geoError} />
+            ) : geoData ? (
+              <div className="grid gap-4">
+                <div className="flex flex-wrap gap-2">
+                  <ToneBadge tone="outline">Всего: {geoData.totalQuotes.toLocaleString("ru-RU")}</ToneBadge>
+                  <ToneBadge tone="success">Распознано: {geoData.matchedQuotes.toLocaleString("ru-RU")}</ToneBadge>
+                  <ToneBadge tone="muted">Не распознано: {geoData.unknownQuotes.toLocaleString("ru-RU")}</ToneBadge>
+                </div>
+                <DotDensityMap
+                  bbox={kanevskyDistrictBbox}
+                  ring={kanevskyDistrictRing}
+                  points={geoData.points}
+                  places={geoData.places}
+                  showTooltip
+                  minHeight={320}
+                />
+                <div className="text-sm text-muted-foreground">
+                  Локация определяется по совпадению населённого пункта в поле `address`; внешние геосервисы не используются.
+                </div>
               </div>
+            ) : (
+              <EmptyState title="Нет данных за период" />
+            )}
+          </SectionCard>
 
-              {!rangeMs ? (
-                <small>Неверный период. Укажите даты в формате YYYY-MM-DD.</small>
-              ) : geoLoading ? (
-                <small>Загрузка...</small>
-              ) : geoError ? (
-                <small className="noticeText-danger">{geoError}</small>
-              ) : geoData ? (
-                <>
-                  <small>
-                    Всего заявок: <b>{geoData.totalQuotes.toLocaleString("ru-RU")}</b> · Распознано:{" "}
-                    <b>{geoData.matchedQuotes.toLocaleString("ru-RU")}</b> · Не распознано:{" "}
-                    <b>{geoData.unknownQuotes.toLocaleString("ru-RU")}</b>
-                  </small>
-                  <DotDensityMap
-                    bbox={kanevskyDistrictBbox}
-                    ring={kanevskyDistrictRing}
-                    points={geoData.points}
-                    places={geoData.places}
-                    showTooltip
-                    minHeight={320}
-                  />
-                  <small className="chartHint">
-                    Локация определяется по совпадению населённого пункта в поле address; внешние геосервисы не используются.
-                  </small>
-                </>
-              ) : (
-                <small>Нет данных за период.</small>
-              )}
-            </section>
-
-            <section className="card chartCard chartPanel geoTopPanel">
-              <h3>Топ населённых пунктов</h3>
-              {geoData?.topPlaces?.length ? <BarTopChart data={geoData.topPlaces} valueLabel="заяв." /> : <small>Нет данных.</small>}
-            </section>
-          </div>
-        </section>
+          <SectionCard title="Топ населённых пунктов" description="Рейтинг по числу распознанных заявок.">
+            {geoData?.topPlaces?.length ? <BarTopChart data={geoData.topPlaces} valueLabel="заяв." /> : <EmptyState title="Нет данных" />}
+          </SectionCard>
+        </div>
       ) : null}
 
       {activeTab === "calc" ? (
-        <section className="chartsGrid">
-          <section className="card chartCard chartPanel">
-            <h3>Тип изделия</h3>
-            <small>
-              Всего: <b>{calcTotal.toLocaleString("ru-RU")}</b>{" "}
-              {calcSource === "analytics_daily" && dailyTotals.leads ? (
-                <span title="Сумма calc.productType / сумма leads">({Math.min(100, calcCoveragePct).toFixed(0)}%)</span>
-              ) : null}
-            </small>
-            {calcProductTypePie.length ? <PieBreakdownChart data={calcProductTypePie} /> : <small>Нет данных.</small>}
-          </section>
+        <div className="grid gap-6 xl:grid-cols-2">
+          <SectionCard
+            title="Тип изделия"
+            description={
+              calcSource === "analytics_daily" && dailyTotals.leads
+                ? `Всего: ${calcTotal.toLocaleString("ru-RU")} (${Math.min(100, calcCoveragePct).toFixed(0)}%)`
+                : `Всего: ${calcTotal.toLocaleString("ru-RU")}`
+            }
+          >
+            {calcProductTypePie.length ? <PieBreakdownChart data={calcProductTypePie} /> : <EmptyState title="Нет данных" />}
+          </SectionCard>
 
-          <section className="card chartCard chartPanel">
-            <h3>Топ опций</h3>
-            {calcOptionsPie.length ? <PieBreakdownChart data={calcOptionsPie} /> : <small>Нет опций за период.</small>}
-          </section>
+          <SectionCard title="Топ опций">
+            {calcOptionsPie.length ? <PieBreakdownChart data={calcOptionsPie} /> : <EmptyState title="Нет опций за период" />}
+          </SectionCard>
 
-          <section className="card chartCard chartPanel">
-            <h3>Профиль</h3>
-            {calcProfileSeriesPie.length ? <PieBreakdownChart data={calcProfileSeriesPie} /> : <small>Нет данных.</small>}
-          </section>
+          <SectionCard title="Профиль">
+            {calcProfileModelPie.length ? <PieBreakdownChart data={calcProfileModelPie} /> : <EmptyState title="Нет данных" />}
+          </SectionCard>
 
-          <section className="card chartCard chartPanel">
-            <h3>Стеклопакет</h3>
-            {calcGlazingPie.length ? <PieBreakdownChart data={calcGlazingPie} /> : <small>Нет данных.</small>}
-          </section>
+          <SectionCard title="Серии профиля">
+            {calcProfileSeriesPie.length ? <PieBreakdownChart data={calcProfileSeriesPie} /> : <EmptyState title="Нет данных" />}
+          </SectionCard>
 
-	          <section className="card chartCard chartPanel">
-	            <h3>Дизайн ламинации</h3>
-	            {calcDesignOptionPie.length ? <PieBreakdownChart data={calcDesignOptionPie} /> : <small>Нет данных.</small>}
-	          </section>
+          <SectionCard title="Стеклопакет">
+            {calcGlazingPie.length ? <PieBreakdownChart data={calcGlazingPie} /> : <EmptyState title="Нет данных" />}
+          </SectionCard>
 
-          <section className="card chartCard chartPanel">
-            <h3>Сервисы</h3>
-            {servicesPie.length ? <PieBreakdownChart data={servicesPie} /> : <small>Нет данных.</small>}
-            {avgDeliveryKm ? <small>Средняя доставка: ~{avgDeliveryKm.toFixed(1)} км</small> : null}
-          </section>
+          <SectionCard title="Опции стеклопакета">
+            {calcGlassOptionsPie.length ? <PieBreakdownChart data={calcGlassOptionsPie} /> : <EmptyState title="Нет данных" />}
+          </SectionCard>
 
-          <section className="card chartCard chartPanel">
-            <h3>Тип двери</h3>
-            {calcDoorSubtypePie.length ? <PieBreakdownChart data={calcDoorSubtypePie} /> : <small>Нет данных по дверям.</small>}
-          </section>
+          <SectionCard title="Дизайн ламинации">
+            {calcDesignOptionPie.length ? <PieBreakdownChart data={calcDesignOptionPie} /> : <EmptyState title="Нет данных" />}
+          </SectionCard>
 
-	          <section className="card chartCard chartPanel">
-	            <h3>Цвет ламинации</h3>
-	            {calcLaminationColorPie.length ? <PieBreakdownChart data={calcLaminationColorPie} /> : <small>Нет данных.</small>}
-	          </section>
-        </section>
+          <SectionCard title="Сервисы" description={avgDeliveryKm ? `Средняя доставка: ~${avgDeliveryKm.toFixed(1)} км` : undefined}>
+            {servicesPie.length ? <PieBreakdownChart data={servicesPie} /> : <EmptyState title="Нет данных" />}
+          </SectionCard>
+
+          <SectionCard title="Тип двери">
+            {calcDoorSubtypePie.length ? <PieBreakdownChart data={calcDoorSubtypePie} /> : <EmptyState title="Нет данных по дверям" />}
+          </SectionCard>
+
+          <SectionCard title="Цвет ламинации">
+            {calcLaminationColorPie.length ? <PieBreakdownChart data={calcLaminationColorPie} /> : <EmptyState title="Нет данных" />}
+          </SectionCard>
+        </div>
       ) : null}
     </AdminShell>
   );

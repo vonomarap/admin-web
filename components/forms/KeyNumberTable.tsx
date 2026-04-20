@@ -2,6 +2,10 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { TrashIcon } from "../Icons";
+import { PageAlert } from "../admin-kit";
+import { Button } from "../ui/button";
+import { Input } from "../ui/input";
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../ui/table";
 
 type KeyNumberRow = {
   id: string;
@@ -149,83 +153,85 @@ export function KeyNumberTable({
   const showLabels = true;
 
   return (
-    <div className="grid" style={{ gap: 10 }}>
-      <div className="rowActions" style={{ justifyContent: "space-between" }}>
-        <div style={{ display: "grid", gap: 2, minWidth: 0 }}>
+    <div className="grid gap-4">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div className="grid min-w-0 gap-1">
           <h3>{title}</h3>
           {subtitle ? <small className="breakLong">{subtitle}</small> : null}
         </div>
-        <button type="button" className="secondary small" onClick={addRow}>
+        <Button type="button" variant="secondary" size="sm" onClick={addRow}>
           {addLabel}
-        </button>
+        </Button>
       </div>
 
-      <div className="tableWrap">
-        <table>
-          <thead>
-            <tr>
-              <th>Название</th>
-              <th style={{ width: "24%" }}>Значение</th>
-              <th style={{ width: "30%" }}>Ключ</th>
-              <th style={{ width: 68 }} />
-            </tr>
-          </thead>
-          <tbody>
-            {rows.map((row) => {
-              const keyTrimmed = row.key.trim();
-              const label = showLabels && knownLabels ? knownLabels[keyTrimmed] ?? knownLabels[keyTrimmed.toLowerCase()] : undefined;
-              const isLocked = Boolean(row.locked) || lockedSet.has(keyTrimmed);
+      <Table>
+        <TableHeader>
+          <TableRow>
+            <TableHead>Название</TableHead>
+            <TableHead className="w-[24%]">Значение</TableHead>
+            <TableHead className="w-[30%]">Ключ</TableHead>
+            <TableHead className="w-[68px]" />
+          </TableRow>
+        </TableHeader>
+        <TableBody>
+          {rows.map((row) => {
+            const keyTrimmed = row.key.trim();
+            const label = showLabels && knownLabels ? knownLabels[keyTrimmed] ?? knownLabels[keyTrimmed.toLowerCase()] : undefined;
+            const isLocked = Boolean(row.locked) || lockedSet.has(keyTrimmed);
 
-              return (
-                <tr key={row.id}>
-                  <td>
-                    {label ? <b className="breakLong">{label}</b> : <small>-</small>}
-                  </td>
-                  <td>
-                    <input
-                      value={row.value}
-                      onChange={(e) => updateRow(row.id, { value: e.target.value })}
-                      placeholder={valuePlaceholder}
-                      inputMode="decimal"
-                      autoCapitalize="none"
-                    />
-                  </td>
-                  <td>
-                    <input
-                      value={row.key}
-                      onChange={(e) => updateRow(row.id, { key: e.target.value })}
-                      placeholder={keyPlaceholder}
-                      autoCapitalize="none"
-                      disabled={isLocked}
-                    />
-                  </td>
-                  <td>
-                    {!isLocked ? (
-                      <button
-                        type="button"
-                        className="iconBtn iconBtn-danger"
-                        aria-label="Удалить"
-                        title="Удалить"
-                        onClick={() => removeRow(row.id)}
-                      >
-                        <TrashIcon />
-                      </button>
-                    ) : null}
-                  </td>
-                </tr>
-              );
-            })}
-          </tbody>
-        </table>
-      </div>
+            return (
+              <TableRow key={row.id}>
+                <TableCell>{label ? <b className="breakLong">{label}</b> : <small>-</small>}</TableCell>
+                <TableCell>
+                  <Input
+                    value={row.value}
+                    onChange={(e) => updateRow(row.id, { value: e.target.value })}
+                    placeholder={valuePlaceholder}
+                    inputMode="decimal"
+                    autoCapitalize="none"
+                  />
+                </TableCell>
+                <TableCell>
+                  <Input
+                    value={row.key}
+                    onChange={(e) => updateRow(row.id, { key: e.target.value })}
+                    placeholder={keyPlaceholder}
+                    autoCapitalize="none"
+                    disabled={isLocked}
+                  />
+                </TableCell>
+                <TableCell>
+                  {!isLocked ? (
+                    <Button
+                      type="button"
+                      variant="destructive"
+                      size="icon"
+                      aria-label="Удалить"
+                      title="Удалить"
+                      onClick={() => removeRow(row.id)}
+                    >
+                      <TrashIcon />
+                    </Button>
+                  ) : null}
+                </TableCell>
+              </TableRow>
+            );
+          })}
+        </TableBody>
+      </Table>
 
       {errors.length ? (
-        <div className="errorBox">
-          {errors.slice(0, 6).map((msg) => (
-            <div key={msg}>{msg}</div>
-          ))}
-          {errors.length > 6 ? <div>…и ещё {errors.length - 6}</div> : null}
-        </div>
+        <PageAlert
+          title="Ошибки в таблице"
+          description={
+            <div className="grid gap-1">
+              {errors.slice(0, 6).map((msg) => (
+                <div key={msg}>{msg}</div>
+              ))}
+              {errors.length > 6 ? <div>…и ещё {errors.length - 6}</div> : null}
+            </div>
+          }
+        />
       ) : null}
     </div>
   );

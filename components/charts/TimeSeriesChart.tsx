@@ -12,6 +12,7 @@ import {
   XAxis,
   YAxis,
 } from "recharts";
+import { ChartContainer, ChartLegendContent, ChartTooltipContent, type ChartConfig } from "../ui/chart";
 
 export type DailySeriesPoint = {
   dateKey: string;
@@ -20,15 +21,20 @@ export type DailySeriesPoint = {
   revenue: number;
 };
 
-const COLORS = {
-  leads: "var(--chart-fg)",
-  confirmed: "var(--chart-muted)",
-  revenue: "var(--chart-accent)",
-  grid: "var(--chart-grid)",
-  axis: "var(--chart-muted)",
-  tooltipBg: "var(--chart-tooltip-bg)",
-  tooltipBorder: "var(--chart-tooltip-border)",
-};
+const chartConfig = {
+  leads: {
+    label: "Заявки",
+    color: "var(--chart-fg)",
+  },
+  confirmed: {
+    label: "Подтверждено",
+    color: "var(--chart-muted)",
+  },
+  revenue: {
+    label: "Выручка",
+    color: "var(--chart-accent)",
+  },
+} satisfies ChartConfig;
 
 function formatTick(key: string): string {
   if (typeof key !== "string" || key.length !== 10) return String(key);
@@ -67,17 +73,17 @@ export function TimeSeriesChart({ data }: { data: DailySeriesPoint[] }): JSX.Ele
   const animationEasing = "ease-out";
 
   return (
-    <div style={{ width: "100%", height: 320 }}>
+    <ChartContainer config={chartConfig} className="h-[320px]">
       <ResponsiveContainer>
         <LineChart data={data} margin={{ top: 10, right: 16, left: 0, bottom: 8 }}>
-          <CartesianGrid stroke={COLORS.grid} strokeDasharray="2 10" vertical={false} />
+          <CartesianGrid stroke="var(--chart-grid)" strokeDasharray="2 10" vertical={false} />
           <XAxis
             dataKey="dateKey"
             tickFormatter={formatTick}
             minTickGap={18}
             axisLine={false}
             tickLine={false}
-            tick={{ fill: COLORS.axis, fontSize: 12 }}
+            tick={{ fill: "var(--chart-muted)", fontSize: 12 }}
             tickMargin={8}
           />
           <YAxis
@@ -98,32 +104,19 @@ export function TimeSeriesChart({ data }: { data: DailySeriesPoint[] }): JSX.Ele
             tickLine={false}
           />
           <Tooltip
-            cursor={{ stroke: "rgba(15, 23, 42, 0.22)", strokeWidth: 1 }}
-            contentStyle={{
-              backgroundColor: COLORS.tooltipBg,
-              border: `1px solid ${COLORS.tooltipBorder}`,
-              borderRadius: 12,
-              color: "var(--chart-fg)",
-              boxShadow: "0 10px 24px rgba(15, 23, 42, 0.12)",
-            }}
-            labelStyle={{ color: "var(--chart-muted)" }}
-            itemStyle={{ color: "var(--chart-fg)" }}
-            formatter={(value: unknown, name: unknown) => {
-              const safe = typeof value === "number" && Number.isFinite(value) ? value : 0;
-              if (name === "revenue") return [safe.toLocaleString("ru-RU"), "Выручка"];
-              if (name === "confirmed") return [safe.toLocaleString("ru-RU"), "Подтверждено"];
-              if (name === "leads") return [safe.toLocaleString("ru-RU"), "Заявки"];
-              return [safe.toLocaleString("ru-RU"), String(name)];
-            }}
-            labelFormatter={(label) => `Дата: ${String(label)}`}
+            cursor={{ stroke: "var(--chart-grid)", strokeWidth: 1 }}
+            content={
+              <ChartTooltipContent
+                labelFormatter={(label) => `Дата: ${formatTick(String(label ?? ""))}`}
+                valueFormatter={(value) => value.toLocaleString("ru-RU")}
+              />
+            }
           />
           <Legend
-            iconType="circle"
-            iconSize={8}
             verticalAlign="bottom"
             align="center"
             height={28}
-            wrapperStyle={{ color: "var(--chart-muted)", fontSize: 11 }}
+            content={<ChartLegendContent />}
           />
           <Line
             key={`ts-${animSeed}-leads`}
@@ -131,12 +124,12 @@ export function TimeSeriesChart({ data }: { data: DailySeriesPoint[] }): JSX.Ele
             type="natural"
             dataKey="leads"
             name="Заявки"
-            stroke={COLORS.leads}
+            stroke="var(--color-leads)"
             strokeWidth={2}
             strokeLinecap="round"
             strokeLinejoin="round"
             dot={false}
-            activeDot={{ r: 3, fill: COLORS.leads, stroke: "#ffffff", strokeWidth: 1 }}
+            activeDot={{ r: 3, fill: "var(--color-leads)", stroke: "var(--background)", strokeWidth: 1 }}
             isAnimationActive={isAnimationActive}
             animationBegin={0}
             animationDuration={animationDuration}
@@ -148,13 +141,13 @@ export function TimeSeriesChart({ data }: { data: DailySeriesPoint[] }): JSX.Ele
             type="natural"
             dataKey="confirmed"
             name="Подтверждено"
-            stroke={COLORS.confirmed}
+            stroke="var(--color-confirmed)"
             strokeWidth={2}
             strokeDasharray="6 9"
             strokeLinecap="round"
             strokeLinejoin="round"
             dot={false}
-            activeDot={{ r: 3, fill: COLORS.confirmed, stroke: "#ffffff", strokeWidth: 1 }}
+            activeDot={{ r: 3, fill: "var(--color-confirmed)", stroke: "var(--background)", strokeWidth: 1 }}
             isAnimationActive={isAnimationActive}
             animationBegin={251}
             animationDuration={animationDuration}
@@ -166,12 +159,12 @@ export function TimeSeriesChart({ data }: { data: DailySeriesPoint[] }): JSX.Ele
             type="natural"
             dataKey="revenue"
             name="Выручка"
-            stroke={COLORS.revenue}
+            stroke="var(--color-revenue)"
             strokeWidth={2}
             strokeLinecap="round"
             strokeLinejoin="round"
             dot={false}
-            activeDot={{ r: 3, fill: COLORS.revenue, stroke: "#ffffff", strokeWidth: 1 }}
+            activeDot={{ r: 3, fill: "var(--color-revenue)", stroke: "var(--background)", strokeWidth: 1 }}
             isAnimationActive={isAnimationActive}
             animationBegin={502}
             animationDuration={animationDuration}
@@ -179,6 +172,6 @@ export function TimeSeriesChart({ data }: { data: DailySeriesPoint[] }): JSX.Ele
           />
         </LineChart>
       </ResponsiveContainer>
-    </div>
+    </ChartContainer>
   );
 }

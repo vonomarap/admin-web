@@ -1,6 +1,8 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import { Card } from "../ui/card";
+import { Button } from "../ui/button";
 
 function canPreview(url: string): boolean {
   const trimmed = url.trim();
@@ -39,13 +41,10 @@ export function ImageThumbPreview({
 
   return (
     <div className="rowActions" style={{ alignItems: "center", gap: 10 }}>
-      <div
+      <Card
         style={{
           width: size,
           height: size,
-          borderRadius: 14,
-          border: "1px solid rgba(249, 115, 22, 0.18)",
-          background: "rgba(255, 255, 255, 0.08)",
           overflow: "hidden",
           flex: "0 0 auto",
           display: "grid",
@@ -66,12 +65,11 @@ export function ImageThumbPreview({
         ) : (
           <small style={{ textAlign: "center", opacity: 0.75, padding: 6 }}>нет превью</small>
         )}
-      </div>
+      </Card>
 
-      <button type="button" className="secondary small" onClick={open}>
+      <Button type="button" variant="secondary" size="sm" onClick={open}>
         {openLabel}
-      </button>
+      </Button>
     </div>
   );
 }
-

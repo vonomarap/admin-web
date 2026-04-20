@@ -1,8 +1,9 @@
 "use client";
 
 import { Suspense, useCallback, useEffect, useMemo, useState } from "react";
+import { format } from "date-fns";
+import { ru } from "date-fns/locale";
 import { useRouter, useSearchParams } from "next/navigation";
-import { signOut } from "firebase/auth";
 import {
   collection,
   doc,
@@ -12,11 +13,22 @@ import {
   serverTimestamp,
   updateDoc,
 } from "firebase/firestore";
-import { auth, db } from "../../lib/firebase";
+import { Calendar as CalendarIcon, ClipboardList, X } from "lucide-react";
+import { db } from "../../lib/firebase";
+import { dateKeyToLocalDate, localDateToDateKey } from "../../lib/date-pickers";
 import { STATUSES, STATUS_LABELS, type QuoteStatus } from "../../lib/quoteStatus";
 import { useAdminSession } from "../../components/AdminSessionProvider";
 import { AdminLoginScreen, LoadingScreen, MissingConfigScreen, NoAccessScreen } from "../../components/AdminScreens";
 import { AdminShell } from "../../components/AdminShell";
+import { EmptyState, FieldBlock, PageAlert, SectionCard, ToneBadge } from "../../components/admin-kit";
+import { Badge } from "../../components/ui/badge";
+import { Button } from "../../components/ui/button";
+import { Calendar } from "../../components/ui/calendar";
+import { Card, CardContent, CardHeader, CardTitle } from "../../components/ui/card";
+import { Input } from "../../components/ui/input";
+import { NativeSelect } from "../../components/ui/native-select";
+import { Popover, PopoverContent, PopoverTrigger } from "../../components/ui/popover";
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../../components/ui/table";
 
 type Quote = {
   id: string;
@@ -173,6 +185,8 @@ function QuotesInner(): JSX.Element {
 
   const [quoteFilters, setQuoteFilters] = useState<QuoteFilters>(DEFAULT_QUOTE_FILTERS);
   const [quoteFiltersHydrated, setQuoteFiltersHydrated] = useState(false);
+  const createdFromDate = useMemo(() => dateKeyToLocalDate(quoteFilters.createdFrom), [quoteFilters.createdFrom]);
+  const createdToDate = useMemo(() => dateKeyToLocalDate(quoteFilters.createdTo), [quoteFilters.createdTo]);
 
   const urlQ = useMemo(() => {
     const raw = searchParams.get("q");
@@ -340,234 +354,258 @@ function QuotesInner(): JSX.Element {
     <AdminShell
       title="Заявки"
       subtitle={session.user?.email ?? ""}
-      rightActions={
-        <>
-          <button className="secondary" onClick={() => void loadQuotes()} disabled={loadingData}>
-            Обновить
-          </button>
-          <button onClick={() => void signOut(auth!)} disabled={!auth}>
-            Выйти
-          </button>
-        </>
-      }
     >
+      <div className="flex flex-col gap-6">
+        {loadError ? <PageAlert title="Ошибка загрузки данных" description={loadError} /> : null}
 
-      {loadError ? (
-        <section className="card noticeCard noticeCard-error">
-          <h3 style={{ marginBottom: 6 }}>Ошибка загрузки данных</h3>
-          <small className="noticeText-danger">{loadError}</small>
-        </section>
-      ) : null}
-
-      <section className="card">
-        <div className="rowActions" style={{ justifyContent: "space-between" }}>
-          <div style={{ display: "grid", gap: 2 }}>
-            <h2>Список</h2>
-            <small>
-              {filteredQuotes.length} из {quotes.length} • Непросмотренных: {unseenCount}
-            </small>
-          </div>
-        </div>
-
-        <div className="filtersPanel" style={{ marginTop: 12 }}>
-          <div className="filtersGrid">
-            <label className="field">
-              <span className="fieldLabel">Поиск</span>
-              <input
-                value={quoteFilters.q}
-                onChange={(e) => setQuoteFilters((prev) => ({ ...prev, q: e.target.value }))}
-                placeholder="ID, UID, телефон, email"
-              />
-            </label>
-
-            <label className="field">
-              <span className="fieldLabel">Статус</span>
-              <select
-                value={quoteFilters.status}
-                onChange={(e) => {
-                  const next = e.target.value;
-                  const nextStatus: QuoteFilterStatus = next === "ALL" ? "ALL" : isQuoteStatus(next) ? next : "ALL";
-                  setQuoteFilters((prev) => ({ ...prev, status: nextStatus }));
-                }}
-              >
-                <option value="ALL">Все</option>
-                {STATUSES.map((status) => (
-                  <option key={status} value={status}>
-                    {STATUS_LABELS[status] ?? status}
-                  </option>
-                ))}
-              </select>
-            </label>
-
-            <label className="field">
-              <span className="fieldLabel">Просмотр</span>
-              <select
-                value={quoteFilters.viewed}
-                onChange={(e) => {
-                  const nextViewed: QuoteFilterViewed = e.target.value === "UNSEEN" ? "UNSEEN" : "ALL";
-                  setQuoteFilters((prev) => ({ ...prev, viewed: nextViewed }));
-                }}
-              >
-                <option value="ALL">Все</option>
-                <option value="UNSEEN">Только непросмотренные</option>
-              </select>
-            </label>
-
-            <label className="field">
-              <span className="fieldLabel">Создано (с)</span>
-              <input
-                type="date"
-                value={quoteFilters.createdFrom}
-                onChange={(e) => setQuoteFilters((prev) => ({ ...prev, createdFrom: e.target.value }))}
-              />
-            </label>
-
-            <label className="field">
-              <span className="fieldLabel">Создано (по)</span>
-              <input
-                type="date"
-                value={quoteFilters.createdTo}
-                onChange={(e) => setQuoteFilters((prev) => ({ ...prev, createdTo: e.target.value }))}
-              />
-            </label>
-          </div>
-
-          <div className="filtersFooter">
-            <small>
-              Показано {filteredQuotes.length} из {quotes.length} • Непросмотренных: {unseenCount}
-            </small>
-            <div className="rowActions" style={{ justifyContent: "flex-end" }}>
-              <button type="button" className="secondary small" onClick={resetQuoteFilters} disabled={!hasQuoteFilters}>
+        <SectionCard
+          eyebrow="Очередь лидов"
+          title="Список заявок"
+          description="Фильтруйте поток по статусу, просмотру и дате создания. Статус можно менять прямо из списка."
+          icon={ClipboardList}
+          tone="sky"
+          footer={
+            <>
+              <div className="text-sm text-muted-foreground">
+                {filteredQuotes.length} из {quotes.length} • Непросмотренных: {unseenCount}
+              </div>
+              <Button type="button" variant="outline" size="sm" onClick={resetQuoteFilters} disabled={!hasQuoteFilters}>
                 Сбросить
-              </button>
+              </Button>
+            </>
+          }
+        >
+          <div className="grid gap-4">
+            <div className="grid gap-4 lg:grid-cols-5">
+              <FieldBlock label="Поиск">
+                <Input
+                  value={quoteFilters.q}
+                  onChange={(e) => setQuoteFilters((prev) => ({ ...prev, q: e.target.value }))}
+                  placeholder="ID, UID, телефон, email"
+                />
+              </FieldBlock>
+
+              <FieldBlock label="Статус">
+                <NativeSelect
+                  value={quoteFilters.status}
+                  onChange={(e) => {
+                    const next = e.target.value;
+                    const nextStatus: QuoteFilterStatus = next === "ALL" ? "ALL" : isQuoteStatus(next) ? next : "ALL";
+                    setQuoteFilters((prev) => ({ ...prev, status: nextStatus }));
+                  }}
+                >
+                  <option value="ALL">Все</option>
+                  {STATUSES.map((status) => (
+                    <option key={status} value={status}>
+                      {STATUS_LABELS[status] ?? status}
+                    </option>
+                  ))}
+                </NativeSelect>
+              </FieldBlock>
+
+              <FieldBlock label="Просмотр">
+                <NativeSelect
+                  value={quoteFilters.viewed}
+                  onChange={(e) => {
+                    const nextViewed: QuoteFilterViewed = e.target.value === "UNSEEN" ? "UNSEEN" : "ALL";
+                    setQuoteFilters((prev) => ({ ...prev, viewed: nextViewed }));
+                  }}
+                >
+                  <option value="ALL">Все</option>
+                  <option value="UNSEEN">Только непросмотренные</option>
+                </NativeSelect>
+              </FieldBlock>
+
+              <FieldBlock label="Создано (с)">
+                <div className="flex min-w-0 items-center gap-2">
+                  <Popover>
+                    <PopoverTrigger asChild>
+                      <Button
+                        type="button"
+                        variant="outline"
+                        data-empty={!createdFromDate || undefined}
+                        className="w-full justify-start text-left font-normal data-[empty=true]:text-muted-foreground"
+                      >
+                        <CalendarIcon data-icon="inline-start" />
+                        {createdFromDate ? <span>{format(createdFromDate, "PPP", { locale: ru })}</span> : <span>Выберите дату</span>}
+                      </Button>
+                    </PopoverTrigger>
+                    <PopoverContent align="start" className="w-auto overflow-hidden p-0">
+                      <Calendar
+                        mode="single"
+                        selected={createdFromDate}
+                        onSelect={(date) => {
+                          if (!date) return;
+                          setQuoteFilters((prev) => ({ ...prev, createdFrom: localDateToDateKey(date) }));
+                        }}
+                        className="rounded-lg"
+                      />
+                    </PopoverContent>
+                  </Popover>
+                  {quoteFilters.createdFrom ? (
+                    <Button
+                      type="button"
+                      size="icon"
+                      variant="outline"
+                      aria-label="Очистить дату начала"
+                      onClick={() => setQuoteFilters((prev) => ({ ...prev, createdFrom: "" }))}
+                    >
+                      <X />
+                    </Button>
+                  ) : null}
+                </div>
+              </FieldBlock>
+
+              <FieldBlock label="Создано (по)">
+                <div className="flex min-w-0 items-center gap-2">
+                  <Popover>
+                    <PopoverTrigger asChild>
+                      <Button
+                        type="button"
+                        variant="outline"
+                        data-empty={!createdToDate || undefined}
+                        className="w-full justify-start text-left font-normal data-[empty=true]:text-muted-foreground"
+                      >
+                        <CalendarIcon data-icon="inline-start" />
+                        {createdToDate ? <span>{format(createdToDate, "PPP", { locale: ru })}</span> : <span>Выберите дату</span>}
+                      </Button>
+                    </PopoverTrigger>
+                    <PopoverContent align="start" className="w-auto overflow-hidden p-0">
+                      <Calendar
+                        mode="single"
+                        selected={createdToDate}
+                        onSelect={(date) => {
+                          if (!date) return;
+                          setQuoteFilters((prev) => ({ ...prev, createdTo: localDateToDateKey(date) }));
+                        }}
+                        className="rounded-lg"
+                      />
+                    </PopoverContent>
+                  </Popover>
+                  {quoteFilters.createdTo ? (
+                    <Button
+                      type="button"
+                      size="icon"
+                      variant="outline"
+                      aria-label="Очистить дату окончания"
+                      onClick={() => setQuoteFilters((prev) => ({ ...prev, createdTo: "" }))}
+                    >
+                      <X />
+                    </Button>
+                  ) : null}
+                </div>
+              </FieldBlock>
             </div>
-          </div>
-        </div>
 
-        <div className="mobileOnly" style={{ marginTop: 12 }}>
-          {!quotes.length ? (
-            <small>Пока нет заявок.</small>
-          ) : !filteredQuotes.length ? (
-            <small>Нет заявок по фильтрам.</small>
-          ) : (
-            <div className="cardList">
-              {filteredQuotes.map((quote) => {
-                const created = formatDateOnly(quote.createdAt);
-                const unseen = isQuoteUnseen(quote);
-
-                return (
-                  <div key={quote.id} className={`itemCard${unseen ? " itemCard-unseen" : ""}`}>
-                    <div className="itemHeader">
-                      <div style={{ display: "grid", gap: 2, minWidth: 0 }}>
-                        <b>Заявка</b>
-                        <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
-                          <small className="breakLong">{quote.id}</small>
-                          {unseen ? <span className="badge badge-new">Новая</span> : null}
-                        </div>
-                      </div>
-                      <div style={{ display: "grid", gap: 2, justifyItems: "end" }}>
-                        <div style={{ fontWeight: 800 }}>{formatCurrency(quote.totalPrice ?? 0, quote.currency)}</div>
-                        <small>{created}</small>
-                      </div>
-                    </div>
-
-                    <div className="kv">
-                      <div className="kvRow">
-                        <div className="kvLabel">Пользователь</div>
-                        <div className="kvValue breakLong">{quote.uid}</div>
-                      </div>
-                      <div className="kvRow">
-                        <div className="kvLabel">Статус</div>
-                        <div style={{ minWidth: 0 }}>
-                          <select value={quote.status} onChange={(e) => void onStatusChange(quote.id, e.target.value)}>
-                            {STATUSES.map((status) => (
-                              <option key={status} value={status}>
-                                {STATUS_LABELS[status] ?? status}
-                              </option>
-                            ))}
-                          </select>
-                        </div>
-                      </div>
-                      <div className="kvRow">
-                        <div className="kvLabel">Дата замера</div>
-                        <div className="kvValue">{quote.preferredMeasurementDate ?? "-"}</div>
-                      </div>
-                    </div>
-
-                    <div className="rowActions" style={{ justifyContent: "flex-end" }}>
-                      <button type="button" className="secondary small" onClick={() => openQuoteDetails(quote.id)}>
-                        Подробнее
-                      </button>
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-          )}
-        </div>
-
-        <div className="desktopOnly" style={{ marginTop: 12 }}>
-          {!quotes.length ? (
-            <small>Пока нет заявок.</small>
-          ) : !filteredQuotes.length ? (
-            <small>Нет заявок по фильтрам.</small>
-          ) : (
-            <div className="tableWrap">
-              <table>
-                <thead>
-                  <tr>
-                    <th>ID</th>
-                    <th>Пользователь</th>
-                    <th className="quoteStatusCol">Статус</th>
-                    <th>Сумма</th>
-                    <th>Дата замера</th>
-                    <th>Создано</th>
-                    <th className="actionsCol">Действия</th>
-                  </tr>
-                </thead>
-                <tbody>
+            {!quotes.length ? (
+              <EmptyState title="Пока нет заявок" description="Новые лиды из приложения и сайта появятся здесь автоматически." />
+            ) : !filteredQuotes.length ? (
+              <EmptyState title="Фильтр ничего не вернул" description="Измените условия поиска или сбросьте фильтры, чтобы увидеть остальные заявки." />
+            ) : (
+              <>
+                <div className="grid gap-3 lg:hidden">
                   {filteredQuotes.map((quote) => {
+                    const created = formatDateOnly(quote.createdAt);
                     const unseen = isQuoteUnseen(quote);
 
                     return (
-                      <tr key={quote.id} className={unseen ? "quoteRowUnseen" : undefined}>
-                        <td>
-                          <div style={{ display: "grid", gap: 6 }}>
-                            <div className="breakLong">{quote.id}</div>
-                            {unseen ? <span className="badge badge-new">Новая</span> : null}
+                      <Card key={quote.id} className="border-border/80">
+                        <CardHeader className="gap-3">
+                          <div className="flex items-start justify-between gap-3">
+                            <div className="grid min-w-0 gap-1">
+                              <CardTitle className="text-base">Заявка</CardTitle>
+                              <div className="breakLong text-sm text-muted-foreground">{quote.id}</div>
+                            </div>
+                            <div className="grid justify-items-end gap-2">
+                              <div className="text-lg font-semibold text-foreground">{formatCurrency(quote.totalPrice ?? 0, quote.currency)}</div>
+                              <div className="text-xs text-muted-foreground">{created}</div>
+                            </div>
                           </div>
-                        </td>
-                        <td className="breakLong">{quote.uid}</td>
-                        <td className="quoteStatusCol">
-                          <select
-                            className="quoteStatusSelect"
-                            value={quote.status}
-                            onChange={(e) => void onStatusChange(quote.id, e.target.value)}
-                          >
-                            {STATUSES.map((status) => (
-                              <option key={status} value={status}>
-                                {STATUS_LABELS[status] ?? status}
-                              </option>
-                            ))}
-                          </select>
-                        </td>
-                        <td>{formatCurrency(quote.totalPrice ?? 0, quote.currency)}</td>
-                        <td>{quote.preferredMeasurementDate ?? "-"}</td>
-                        <td>{formatDateOnly(quote.createdAt)}</td>
-                        <td>
-                          <button type="button" className="secondary small" onClick={() => openQuoteDetails(quote.id)}>
-                            Подробнее
-                          </button>
-                        </td>
-                      </tr>
+                          <div className="flex flex-wrap gap-2">
+                            {unseen ? <ToneBadge tone="success">Новая</ToneBadge> : null}
+                            <Badge variant="outline">{quote.uid || "Без UID"}</Badge>
+                          </div>
+                        </CardHeader>
+                        <CardContent className="grid gap-4 pt-0">
+                          <div className="grid gap-3">
+                            <FieldBlock label="Статус">
+                              <NativeSelect value={quote.status} onChange={(e) => void onStatusChange(quote.id, e.target.value)}>
+                                {STATUSES.map((status) => (
+                                  <option key={status} value={status}>
+                                    {STATUS_LABELS[status] ?? status}
+                                  </option>
+                                ))}
+                              </NativeSelect>
+                            </FieldBlock>
+                            <FieldBlock label="Дата замера">
+                              <div className="text-sm text-foreground">{quote.preferredMeasurementDate ?? "-"}</div>
+                            </FieldBlock>
+                          </div>
+                          <div className="flex justify-end">
+                            <Button type="button" variant="outline" size="sm" onClick={() => openQuoteDetails(quote.id)}>
+                              Подробнее
+                            </Button>
+                          </div>
+                        </CardContent>
+                      </Card>
                     );
                   })}
-                </tbody>
-              </table>
-            </div>
-          )}
-        </div>
-      </section>
+                </div>
+
+                <div className="hidden lg:block">
+                  <Table>
+                    <TableHeader>
+                      <TableRow>
+                        <TableHead>ID</TableHead>
+                        <TableHead>Пользователь</TableHead>
+                        <TableHead>Статус</TableHead>
+                        <TableHead>Сумма</TableHead>
+                        <TableHead>Дата замера</TableHead>
+                        <TableHead>Создано</TableHead>
+                        <TableHead>Действия</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {filteredQuotes.map((quote) => {
+                        const unseen = isQuoteUnseen(quote);
+
+                        return (
+                          <TableRow key={quote.id} className={unseen ? "bg-accent/5" : undefined}>
+                            <TableCell>
+                              <div className="grid gap-2">
+                                <div className="breakLong">{quote.id}</div>
+                                {unseen ? <ToneBadge tone="success">Новая</ToneBadge> : null}
+                              </div>
+                            </TableCell>
+                            <TableCell className="breakLong">{quote.uid}</TableCell>
+                            <TableCell>
+                              <NativeSelect value={quote.status} onChange={(e) => void onStatusChange(quote.id, e.target.value)}>
+                                {STATUSES.map((status) => (
+                                  <option key={status} value={status}>
+                                    {STATUS_LABELS[status] ?? status}
+                                  </option>
+                                ))}
+                              </NativeSelect>
+                            </TableCell>
+                            <TableCell>{formatCurrency(quote.totalPrice ?? 0, quote.currency)}</TableCell>
+                            <TableCell>{quote.preferredMeasurementDate ?? "-"}</TableCell>
+                            <TableCell>{formatDateOnly(quote.createdAt)}</TableCell>
+                            <TableCell>
+                              <Button type="button" variant="outline" size="sm" onClick={() => openQuoteDetails(quote.id)}>
+                                Подробнее
+                              </Button>
+                            </TableCell>
+                          </TableRow>
+                        );
+                      })}
+                    </TableBody>
+                  </Table>
+                </div>
+              </>
+            )}
+          </div>
+        </SectionCard>
+      </div>
     </AdminShell>
   );
 }

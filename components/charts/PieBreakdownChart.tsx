@@ -2,6 +2,7 @@
 
 import { useMemo } from "react";
 import { Cell, Label, Pie, PieChart, ResponsiveContainer, Tooltip } from "recharts";
+import { ChartContainer, ChartTooltipContent, type ChartConfig } from "../ui/chart";
 
 export type PieDatum = { key?: string; name: string; value: number; color?: string };
 
@@ -93,22 +94,23 @@ export function PieBreakdownChart({ data, colors = PIE_COLORS_NEUTRAL }: { data:
     });
   }, [colors, data, total]);
 
+  const chartConfig = useMemo<ChartConfig>(() => {
+    return legendItems.reduce<ChartConfig>((acc, item) => {
+      acc[item.key] = {
+        label: item.name,
+        color: item.fill,
+      };
+      return acc;
+    }, {});
+  }, [legendItems]);
+
   return (
-    <div style={{ width: "100%" }}>
-      <div style={{ width: "100%", height: 320 }}>
+    <ChartContainer config={chartConfig} className="w-full">
+      <div className="h-[320px] w-full">
         <ResponsiveContainer>
           <PieChart>
             <Tooltip
-              formatter={(value: unknown) => Number(value).toLocaleString("ru-RU")}
-              contentStyle={{
-                backgroundColor: "var(--chart-tooltip-bg)",
-                border: "1px solid var(--chart-tooltip-border)",
-                borderRadius: 12,
-                color: "var(--chart-fg)",
-                boxShadow: "0 10px 24px rgba(15, 23, 42, 0.12)",
-              }}
-              labelStyle={{ color: "var(--chart-muted)" }}
-              itemStyle={{ color: "var(--chart-fg)" }}
+              content={<ChartTooltipContent hideLabel valueFormatter={(value) => value.toLocaleString("ru-RU")} />}
             />
             <Pie
               data={data}
@@ -121,7 +123,7 @@ export function PieBreakdownChart({ data, colors = PIE_COLORS_NEUTRAL }: { data:
               paddingAngle={2}
               cornerRadius={6}
               strokeWidth={1}
-              stroke="rgba(255, 255, 255, 0.94)"
+              stroke="var(--background)"
               isAnimationActive
               animationDuration={980}
               animationEasing="ease-out"
@@ -161,56 +163,25 @@ export function PieBreakdownChart({ data, colors = PIE_COLORS_NEUTRAL }: { data:
         </ResponsiveContainer>
       </div>
 
-      <div
-        style={{
-          display: "flex",
-          flexWrap: "wrap",
-          justifyContent: "center",
-          gap: "10px 14px",
-          marginTop: 10,
-        }}
-      >
+      <div className="mt-4 flex flex-wrap justify-center gap-3">
         {legendItems.map((item) => (
-          <div key={item.key} style={{ display: "grid", gap: 4, minWidth: 140, maxWidth: 220 }}>
-            <div style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 0 }}>
+          <div key={item.key} className="grid min-w-[140px] max-w-[220px] gap-1 rounded-xl border border-border/60 bg-background/60 px-3 py-2">
+            <div className="flex min-w-0 items-center gap-2">
               <span
                 aria-hidden
-                style={{
-                  width: 8,
-                  height: 8,
-                  borderRadius: 999,
-                  backgroundColor: item.fill,
-                  boxShadow: "0 0 0 2px rgba(15, 23, 42, 0.06)",
-                  flex: "0 0 auto",
-                }}
+                className="size-2.5 shrink-0 rounded-full"
+                style={{ backgroundColor: item.fill }}
               />
-              <span
-                title={item.name}
-                style={{
-                  color: "var(--chart-muted)",
-                  fontSize: 11,
-                  overflow: "hidden",
-                  textOverflow: "ellipsis",
-                  whiteSpace: "nowrap",
-                }}
-              >
+              <span title={item.name} className="truncate text-xs text-muted-foreground">
                 {item.name}
               </span>
             </div>
-            <div
-              style={{
-                paddingLeft: 16,
-                fontSize: 12,
-                fontWeight: 800,
-                color: "var(--chart-fg)",
-                fontVariantNumeric: "tabular-nums",
-              }}
-            >
+            <div className="pl-4 text-sm font-semibold tabular-nums text-foreground">
               {item.pctText}
             </div>
           </div>
         ))}
       </div>
-    </div>
+    </ChartContainer>
   );
 }

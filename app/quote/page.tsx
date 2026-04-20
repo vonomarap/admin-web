@@ -1,14 +1,18 @@
 "use client";
 
 import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { ClipboardList, Settings2, ShieldCheck, TrendingUp, User } from "lucide-react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { signOut } from "firebase/auth";
 import { doc, getDoc, serverTimestamp, updateDoc } from "firebase/firestore";
-import { auth, db } from "../../lib/firebase";
+import { db } from "../../lib/firebase";
 import { useAdminSession } from "../../components/AdminSessionProvider";
 import { AdminLoginScreen, LoadingScreen, MissingConfigScreen, NoAccessScreen } from "../../components/AdminScreens";
 import { AdminShell } from "../../components/AdminShell";
-import type { CalcResultDTO } from "window-door-store-calc-engine";
+import { DetailRows, EmptyState, PageAlert, SectionCard, ToneBadge } from "../../components/admin-kit";
+import { Badge } from "../../components/ui/badge";
+import { Button } from "../../components/ui/button";
+import { NativeSelect } from "../../components/ui/native-select";
+import type { CalcBreakdown, CalcLineItem, CalcResultDTO } from "window-door-store-calc-engine";
 
 type QuoteDoc = {
   uid?: string;
@@ -34,6 +38,7 @@ type QuoteDoc = {
     discount?: number;
     total?: number;
     currency?: string;
+    breakdown?: CalcBreakdown;
     calcDto?: CalcResultDTO;
   };
 };
@@ -55,6 +60,7 @@ type CalcInput = {
   dripEdgeWidthCm?: number;
   decorBarsColor?: string;
 
+  profileModel?: string;
   profileSeries?: string;
   profileDepthMm?: number;
   glazing?: string;
@@ -118,11 +124,32 @@ const PROFILE_SERIES_LABELS: Record<string, string> = {
   bautex: "Bautex",
   kbe: "KBE",
   rehau: "Rehau",
+  kommerling: "Kommerling",
+};
+
+const PROFILE_MODEL_LABELS: Record<string, string> = {
+  bautex_58: "Bautex 58",
+  kbe_58: "KBE 58",
+  kbe_expert_70: "KBE Expert 70",
+  kbe_76: "KBE 76",
+  rehau_blitz_new: "Rehau Blitz New",
+  rehau_thermo_design: "Rehau Thermo-Design",
+  rehau_grazio: "Rehau Grazio",
+  rehau_delight_design: "Rehau Delight-Design",
+  rehau_intelio: "Rehau Intelio",
+  rehau_geneo: "Rehau Geneo",
+  kommerling_70_ad: "Kommerling 70 AD",
+  kommerling_76_ad: "Kommerling 76 AD",
 };
 
 const GLAZING_LABELS: Record<string, string> = {
   single: "Однокамерный",
   double: "Двухкамерный",
+};
+
+const GLASS_OPTION_LABELS: Record<string, string> = {
+  energy_saving: "Энергосберегающий стеклопакет",
+  multi_functional: "Мультифункциональный стеклопакет",
 };
 
 const OPENING_TYPE_LABELS: Record<string, string> = {
@@ -162,6 +189,20 @@ const DESIGN_OPTION_LABELS: Record<string, string> = {
   twoSideWood: "Двусторонняя (под дерево)",
 };
 
+const BREAKDOWN_GROUP_LABELS: Record<string, string> = {
+  product: "Изделие",
+  profile: "Профиль",
+  glazing: "Стеклопакет",
+  design: "Дизайн",
+  door: "Дверь",
+  construction: "Конструкция",
+  hardware: "Фурнитура",
+  options: "Комплектующие",
+  services: "Услуги",
+  discount: "Скидка",
+  adjustments: "Корректировки",
+};
+
 const LAMINATION_COLOR_LABELS: Record<string, string> = {
   gold_oak: "Золотой дуб",
   grey_oak: "Серый дуб",
@@ -194,6 +235,7 @@ const OPTION_LABELS: Record<string, string> = {
 const DECOR_BARS_COLOR_LABELS: Record<string, string> = {
   white: "Белая",
   gold: "Золотая",
+  brown: "Коричневая",
 };
 const QUOTE_UNSEEN_FEATURE_RELEASE_AT_MS = Date.parse("2026-02-27T00:00:00Z");
 
@@ -284,6 +326,48 @@ function optionLabel(
   if (key === "drip_edge" && dripEdgeWidth) return `${base} (${dripEdgeWidth} см)`;
   if (key === "decor_bars" && decorBarsColorLabel) return `${base} (${decorBarsColorLabel})`;
   return base;
+}
+
+function breakdownItemLabel(item: CalcLineItem): string {
+  const [prefix, rawValue = ""] = item.key.split(":");
+
+  if (prefix === "base_product") {
+    if (rawValue === "window") return "База: окно";
+    if (rawValue === "balcony_door") return "База: балконная дверь";
+    if (rawValue === "entrance_door") return "База: входная дверь";
+    if (rawValue === "interior_door") return "База: межкомнатная дверь";
+  }
+
+  if (prefix === "material") return `Материал: ${rawValue.toUpperCase()}`;
+  if (prefix === "profile_model") return `Модель профиля: ${PROFILE_MODEL_LABELS[rawValue] ?? rawValue}`;
+  if (prefix === "profile_series") return `Серия профиля: ${PROFILE_SERIES_LABELS[rawValue] ?? rawValue}`;
+  if (prefix === "profile_depth") return `Глубина профиля: ${rawValue} мм`;
+  if (prefix === "glazing") return `Стеклопакет: ${GLAZING_LABELS[rawValue] ?? rawValue}`;
+  if (prefix === "glass_option") return GLASS_OPTION_LABELS[rawValue] ?? rawValue;
+  if (prefix === "lamination") return `Ламинация: ${LAMINATION_LABELS[rawValue] ?? rawValue}`;
+  if (prefix === "lamination_group") return `Группа ламинации: ${LAMINATION_GROUP_LABELS[rawValue] ?? rawValue}`;
+  if (prefix === "lamination_side") return `Сторона ламинации: ${rawValue === "inside" ? "Внутренняя" : "Наружная"}`;
+  if (prefix === "lamination_color") return `Цвет ламинации: ${LAMINATION_COLOR_LABELS[rawValue] ?? rawValue}`;
+  if (prefix === "door_fill_top") return `Верх двери: ${ENTRANCE_FILL_LABELS[rawValue] ?? rawValue}`;
+  if (prefix === "door_fill_bottom") return `Низ двери: ${ENTRANCE_FILL_LABELS[rawValue] ?? rawValue}`;
+  if (prefix === "opening_sashes") return `Открывание: ${OPENING_TYPE_LABELS[normalizeCode(rawValue)] ?? rawValue}`;
+  if (prefix === "hardware") return item.title?.trim() ? `Фурнитура: ${item.title.trim()}` : "Фурнитура";
+  if (prefix === "option") return optionLabel(rawValue);
+
+  if (item.key === "meeting_pair_kit") return "Встречная пара без импоста";
+  if (item.key === "mullion") return "Импост";
+  if (item.key === "install_area") return "Монтаж по площади";
+  if (item.key === "install_sashes") return "Монтаж створок";
+  if (item.key === "delivery_base") return "Базовая доставка";
+  if (item.key === "delivery_distance") return "Доставка за километраж";
+  if (item.key === "rounding") return "Округление";
+  if (item.key === "promo_discount") return "Скидка по промокоду";
+
+  return item.title?.trim() || item.key;
+}
+
+function breakdownGroupLabel(key: string): string {
+  return BREAKDOWN_GROUP_LABELS[key] ?? key;
 }
 
 function labelOrFallback(map: Record<string, string>, value: unknown): string {
@@ -522,361 +606,276 @@ function QuoteDetailsInner(): JSX.Element {
       subtitle={quoteId || "-"}
       rightActions={
         <>
-          <button className="secondary" onClick={() => router.push("/quotes")}>
+          <Button variant="outline" onClick={() => router.push("/quotes")}>
             Назад
-          </button>
-          <button className="secondary" onClick={() => void load()} disabled={loading}>
-            {loading ? "Загрузка..." : "Обновить"}
-          </button>
-          <button onClick={() => void signOut(auth!)} disabled={!auth}>
-            Выйти
-          </button>
+          </Button>
         </>
       }
     >
+      <div className="flex flex-col gap-6">
+        {loadError ? <PageAlert title="Ошибка" description={loadError} /> : null}
 
-      {loadError ? (
-        <section className="card noticeCard noticeCard-error">
-          <h3 style={{ marginBottom: 6 }}>Ошибка</h3>
-          <small className="noticeText-danger">{loadError}</small>
-        </section>
-      ) : null}
+        {quote ? (
+          <>
+            <div className="grid gap-4 xl:grid-cols-2">
+              <SectionCard
+                eyebrow="Контакт клиента"
+                title="Контакты"
+                description="Первичные поля, которые оператор использует для связи и выезда на замер."
+                icon={User}
+                tone="sky"
+              >
+                <DetailRows
+                  items={[
+                    { label: "Имя", value: contactName },
+                    {
+                      label: "Телефон",
+                      value:
+                        contactPhone !== "-" ? (
+                          <a href={`tel:${contactPhone}`} className="text-inherit no-underline">
+                            {contactPhone}
+                          </a>
+                        ) : (
+                          contactPhone
+                        ),
+                    },
+                    ...(contactEmail ? [{ label: "Email", value: contactEmail }] : []),
+                    ...(typeof quote.address === "string"
+                      ? [{ label: "Адрес", value: quote.address.trim() ? quote.address.trim() : "-" }]
+                      : []),
+                    { label: "Дата замера", value: formatIsoDate(quote.preferredMeasurementDate) },
+                    { label: "Промокод", value: quote.promoCode?.trim() ? quote.promoCode.trim() : "-" },
+                  ]}
+                />
+              </SectionCard>
 
-      {quote ? (
-        <section className="grid cols-2">
-          <section className="card">
-            <h2>Контакты</h2>
-            <div className="kv" style={{ marginTop: 10 }}>
-              <div className="kvRow">
-                <div className="kvLabel">Имя</div>
-                <div className="kvValue breakLong">{contactName}</div>
-              </div>
-              <div className="kvRow">
-                <div className="kvLabel">Телефон</div>
-                <div className="kvValue breakLong">
-                  {contactPhone !== "-" ? (
-                    <a href={`tel:${contactPhone}`} style={{ color: "inherit", textDecoration: "none" }}>
-                      {contactPhone}
-                    </a>
-                  ) : (
-                    contactPhone
-                  )}
+              <SectionCard
+                eyebrow="Продажа"
+                title="Статус и сумма"
+                description="Статус заявки можно обновлять прямо на карточке."
+                icon={TrendingUp}
+                tone="sky"
+              >
+                <div className="grid gap-4">
+                  <div className="grid gap-2">
+                    <div className="text-sm font-medium text-foreground">Статус</div>
+                    <NativeSelect value={quote.status || "NEW"} onChange={(e) => void onStatusChange(e.target.value)} disabled={savingStatus}>
+                      {STATUSES.map((status) => (
+                        <option key={status} value={status}>
+                          {STATUS_LABELS[status] ?? status}
+                        </option>
+                      ))}
+                    </NativeSelect>
+                  </div>
+                  <DetailRows
+                    items={[
+                      { label: "Сумма", value: formatCurrency(quote.totalPrice ?? quote.calcResult?.total ?? 0, currency) },
+                      ...(typeof quote.calcResult?.subtotal === "number"
+                        ? [{ label: "Подитог", value: formatCurrency(quote.calcResult.subtotal, currency) }]
+                        : []),
+                      ...(typeof quote.calcResult?.discount === "number"
+                        ? [{ label: "Скидка", value: formatCurrency(quote.calcResult.discount, currency) }]
+                        : []),
+                      ...(typeof quote.calcResult?.total === "number"
+                        ? [{ label: "Итого", value: formatCurrency(quote.calcResult.total, currency) }]
+                        : []),
+                    ]}
+                  />
                 </div>
-              </div>
-              {contactEmail ? (
-                <div className="kvRow">
-                  <div className="kvLabel">Email</div>
-                  <div className="kvValue breakLong">{contactEmail}</div>
-                </div>
-              ) : null}
-              {typeof quote.address === "string" ? (
-                <div className="kvRow">
-                  <div className="kvLabel">Адрес</div>
-                  <div className="kvValue breakLong">{quote.address.trim() ? quote.address.trim() : "-"}</div>
-                </div>
-              ) : null}
-              <div className="kvRow">
-                <div className="kvLabel">Дата замера</div>
-                <div className="kvValue">{formatIsoDate(quote.preferredMeasurementDate)}</div>
-              </div>
-              <div className="kvRow">
-                <div className="kvLabel">Промокод</div>
-                <div className="kvValue">{quote.promoCode?.trim() ? quote.promoCode.trim() : "-"}</div>
-              </div>
-            </div>
-          </section>
+              </SectionCard>
 
-          <section className="card">
-            <h2>Статус и сумма</h2>
-            <div className="kv" style={{ marginTop: 10 }}>
-              <div className="kvRow">
-                <div className="kvLabel">Статус</div>
-                <div style={{ minWidth: 0 }}>
-                  <select
-                    value={quote.status || "NEW"}
-                    onChange={(e) => void onStatusChange(e.target.value)}
-                    disabled={savingStatus}
-                  >
-                    {STATUSES.map((status) => (
-                      <option key={status} value={status}>
-                        {STATUS_LABELS[status] ?? status}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-              </div>
-              <div className="kvRow">
-                <div className="kvLabel">Сумма</div>
-                <div className="kvValue">{formatCurrency(quote.totalPrice ?? quote.calcResult?.total ?? 0, currency)}</div>
-              </div>
-              {typeof quote.calcResult?.subtotal === "number" ? (
-                <div className="kvRow">
-                  <div className="kvLabel">Подитог</div>
-                  <div className="kvValue">{formatCurrency(quote.calcResult.subtotal, currency)}</div>
-                </div>
-              ) : null}
-              {typeof quote.calcResult?.discount === "number" ? (
-                <div className="kvRow">
-                  <div className="kvLabel">Скидка</div>
-                  <div className="kvValue">{formatCurrency(quote.calcResult.discount, currency)}</div>
-                </div>
-              ) : null}
-              {typeof quote.calcResult?.total === "number" ? (
-                <div className="kvRow">
-                  <div className="kvLabel">Итого</div>
-                  <div className="kvValue">{formatCurrency(quote.calcResult.total, currency)}</div>
-                </div>
-              ) : null}
-            </div>
-          </section>
-        </section>
-      ) : null}
-
-      {quote && calcInput ? (
-        <section className="card">
-          <h2>Параметры изделия (из калькулятора)</h2>
-          <div className="kv" style={{ marginTop: 10 }}>
-            <div className="kvRow">
-              <div className="kvLabel">Тип</div>
-              <div className="kvValue">{labelOrFallback(PRODUCT_TYPE_LABELS, calcInput.productType)}</div>
-            </div>
-
-            {normalizeCode(calcInput.productType) === "door" ? (
-              <div className="kvRow">
-                <div className="kvLabel">Подтип двери</div>
-                <div className="kvValue">{labelOrFallback(DOOR_SUBTYPE_LABELS, calcInput.doorSubtype)}</div>
-              </div>
-            ) : null}
-
-            {normalizeCode(calcInput.productType) === "door" && doorHandleSide && derivedOpeningSashes && derivedOpeningSashes > 0 ? (
-              <div className="kvRow">
-                <div className="kvLabel">Сторона ручки</div>
-                <div className="kvValue">{HANDLE_SIDE_LABELS[doorHandleSide] ?? doorHandleSide}</div>
-              </div>
-            ) : null}
-
-            <div className="kvRow">
-              <div className="kvLabel">Размер</div>
-              <div className="kvValue">{widthCm && heightCm ? `${Math.round(widthCm)}×${Math.round(heightCm)} см` : "-"}</div>
-            </div>
-
-            <div className="kvRow">
-              <div className="kvLabel">Кол-во</div>
-              <div className="kvValue">{typeof calcInput.quantity === "number" ? String(calcInput.quantity) : "-"}</div>
-            </div>
-
-            <div className="kvRow">
-              <div className="kvLabel">Створок</div>
-              <div className="kvValue">{derivedSashCount !== null ? String(derivedSashCount) : "-"}</div>
-            </div>
-
-            <div className="kvRow">
-              <div className="kvLabel">Откр. створок</div>
-              <div className="kvValue">{derivedOpeningSashes !== null ? String(derivedOpeningSashes) : "-"}</div>
-            </div>
-
-	            <div className="kvRow">
-	              <div className="kvLabel">Тип открывания</div>
-	              <div className="kvValue">{derivedOpeningTypeLabel}</div>
-	            </div>
-
-	            {typeof meetingPairKitCount === "number" && meetingPairKitCount > 0 ? (
-	              <div className="kvRow">
-	                <div className="kvLabel">Встречная пара</div>
-	                <div className="kvValue">Да</div>
-	              </div>
-	            ) : null}
-
-	            {hardwareKeyRaw || hardwareLabel ? (
-	              <div className="kvRow">
-	                <div className="kvLabel">Фурнитура</div>
-	                <div className="kvValue">{hardwareValue}</div>
-              </div>
-            ) : null}
-
-            {sashes?.length ? (
-              <div className="kvRow">
-                <div className="kvLabel">Створки</div>
-                <div className="kvValue">
-                  <div className="pillList">
-                    {sashes.map((sash, idx) => (
-                      <span key={`sash-${idx}`} className="pill">
-                        {idx + 1}: {sash.widthCm} см · {SASH_OPENING_LABELS[sash.opening] ?? sash.opening}
-                        {sash.opening !== "fixed" && sash.handleSide
-                          ? ` · ${HANDLE_SIDE_LABELS[sash.handleSide] ?? sash.handleSide}`
-                          : ""}
-                      </span>
+              {quote?.calcResult?.breakdown?.groups?.length ? (
+                <SectionCard
+                  eyebrow="Продажа"
+                  title="Состав сметы"
+                  description="Структура цены по этапам расчёта."
+                  icon={ClipboardList}
+                  tone="sky"
+                >
+                  <div className="grid gap-3">
+                    {quote.calcResult.breakdown.groups.map((group) => (
+                      <div key={group.key} className="grid gap-2 rounded-2xl border border-border/70 bg-background/70 p-4">
+                        <div className="flex items-center justify-between gap-3">
+                          <div className="text-sm font-medium text-foreground">{breakdownGroupLabel(group.key)}</div>
+                          <div className="text-sm font-semibold text-foreground">{formatCurrency(group.total, currency)}</div>
+                        </div>
+                        <div className="grid gap-2">
+                          {group.items.map((item) => (
+                            <div key={`${group.key}:${item.key}:${item.title ?? ""}`} className="flex items-start justify-between gap-3 text-sm text-muted-foreground">
+                              <span>{breakdownItemLabel(item)}</span>
+                              <span>{formatCurrency(item.total, currency)}</span>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
                     ))}
                   </div>
-                </div>
-              </div>
-            ) : null}
-
-            <div className="kvRow">
-              <div className="kvLabel">Профиль</div>
-              <div className="kvValue">
-                {calcInput.profileSeries || calcInput.profileDepthMm ? (
-                  <>
-                    {labelOrFallback(PROFILE_SERIES_LABELS, calcInput.profileSeries)}{" "}
-                    {typeof calcInput.profileDepthMm === "number"
-                      ? `${calcInput.profileDepthMm === 82 ? 85 : calcInput.profileDepthMm} мм`
-                      : ""}
-                  </>
-                ) : (
-                  "-"
-                )}
-              </div>
+                </SectionCard>
+              ) : null}
             </div>
 
-            <div className="kvRow">
-              <div className="kvLabel">Стеклопакет</div>
-              <div className="kvValue">{labelOrFallback(GLAZING_LABELS, calcInput.glazing)}</div>
-            </div>
+            {calcInput ? (
+              <SectionCard
+                eyebrow="Данные калькулятора"
+                title="Параметры изделия"
+                description="Расчётные поля и derived-значения, которые пришли из калькулятора."
+                icon={Settings2}
+                tone="sky"
+              >
+                <div className="grid gap-4">
+                  <DetailRows
+                    columns={2}
+                    items={[
+                      { label: "Тип", value: labelOrFallback(PRODUCT_TYPE_LABELS, calcInput.productType) },
+                      ...(normalizeCode(calcInput.productType) === "door"
+                        ? [{ label: "Подтип двери", value: labelOrFallback(DOOR_SUBTYPE_LABELS, calcInput.doorSubtype) }]
+                        : []),
+                      ...(normalizeCode(calcInput.productType) === "door" && doorHandleSide && derivedOpeningSashes && derivedOpeningSashes > 0
+                        ? [{ label: "Сторона ручки", value: HANDLE_SIDE_LABELS[doorHandleSide] ?? doorHandleSide }]
+                        : []),
+                      { label: "Размер", value: widthCm && heightCm ? `${Math.round(widthCm)}×${Math.round(heightCm)} см` : "-" },
+                      { label: "Количество", value: typeof calcInput.quantity === "number" ? String(calcInput.quantity) : "-" },
+                      { label: "Створок", value: derivedSashCount !== null ? String(derivedSashCount) : "-" },
+                      { label: "Откр. створок", value: derivedOpeningSashes !== null ? String(derivedOpeningSashes) : "-" },
+                      { label: "Тип открывания", value: derivedOpeningTypeLabel },
+                      ...(typeof meetingPairKitCount === "number" && meetingPairKitCount > 0 ? [{ label: "Встречная пара", value: "Да" }] : []),
+                      ...(hardwareKeyRaw || hardwareLabel ? [{ label: "Фурнитура", value: hardwareValue }] : []),
+                      {
+                        label: "Профиль",
+                        value:
+                          calcInput.profileModel || calcInput.profileSeries || calcInput.profileDepthMm ? (
+                            <>
+                              {calcInput.profileModel
+                                ? labelOrFallback(PROFILE_MODEL_LABELS, calcInput.profileModel)
+                                : labelOrFallback(PROFILE_SERIES_LABELS, calcInput.profileSeries)}{" "}
+                              {!calcInput.profileModel && typeof calcInput.profileDepthMm === "number"
+                                ? `${calcInput.profileDepthMm === 82 ? 85 : calcInput.profileDepthMm} мм`
+                                : ""}
+                            </>
+                          ) : (
+                            "-"
+                          ),
+                      },
+                      { label: "Стеклопакет", value: labelOrFallback(GLAZING_LABELS, calcInput.glazing) },
+                      { label: "Энергосбер.", value: boolLabel(calcInput.glassOptions?.energySaving) },
+                      { label: "Мультиф.", value: boolLabel(calcInput.glassOptions?.multiFunctional) },
+                      {
+                        label: "Дизайн",
+                        value: (() => {
+                          const lamination = normalizeCode(calcInput.lamination);
+                          if (!lamination || lamination === "none") return DESIGN_OPTION_LABELS.none;
+                          if (lamination === "oneside") {
+                            const side = normalizeCode(calcInput.laminationSide);
+                            if (side === "inside") return DESIGN_OPTION_LABELS.inside;
+                            return DESIGN_OPTION_LABELS.outside;
+                          }
+                          if (lamination === "twoside") {
+                            const group = normalizeCode(calcInput.laminationGroup);
+                            if (group === "color") return DESIGN_OPTION_LABELS.twoSideColor;
+                            if (group === "wood") return DESIGN_OPTION_LABELS.twoSideWood;
+                            return DESIGN_OPTION_LABELS.twoSideWhite;
+                          }
+                          return "-";
+                        })(),
+                      },
+                      ...(calcInput.laminationColor
+                        ? [
+                            {
+                              label: "Цвет",
+                              value: LAMINATION_COLOR_LABELS[normalizeCode(calcInput.laminationColor)] ?? calcInput.laminationColor,
+                            },
+                          ]
+                        : []),
+                      ...(calcInput.entranceOptions
+                        ? [
+                            {
+                              label: "Наполнение (верх)",
+                              value: labelOrFallback(
+                                ENTRANCE_FILL_LABELS,
+                                calcInput.entranceOptions.fillTop ?? calcInput.entranceOptions.fillType
+                              ),
+                            },
+                            {
+                              label: "Наполнение (низ)",
+                              value: labelOrFallback(
+                                ENTRANCE_FILL_LABELS,
+                                calcInput.entranceOptions.fillBottom ?? calcInput.entranceOptions.fillType
+                              ),
+                            },
+                          ]
+                        : []),
+                      { label: "Монтаж", value: boolLabel(calcInput.services?.installEnabled) },
+                      { label: "Доставка", value: boolLabel(calcInput.services?.deliveryEnabled) },
+                      ...(calcInput.services?.deliveryEnabled
+                        ? [
+                            {
+                              label: "Доставка, км",
+                              value: typeof calcInput.services?.deliveryKm === "number" ? String(calcInput.services.deliveryKm) : "-",
+                            },
+                          ]
+                        : []),
+                    ]}
+                  />
 
-            <div className="kvRow">
-              <div className="kvLabel">Энергосбер.</div>
-              <div className="kvValue">{boolLabel(calcInput.glassOptions?.energySaving)}</div>
-            </div>
+                  {sashes?.length ? (
+                    <div className="grid gap-2">
+                      <div className="text-sm font-medium text-foreground">Створки</div>
+                      <div className="flex flex-wrap gap-2">
+                        {sashes.map((sash, idx) => (
+                          <Badge key={`sash-${idx}`} variant="outline">
+                            {idx + 1}: {sash.widthCm} см · {SASH_OPENING_LABELS[sash.opening] ?? sash.opening}
+                            {sash.opening !== "fixed" && sash.handleSide
+                              ? ` · ${HANDLE_SIDE_LABELS[sash.handleSide] ?? sash.handleSide}`
+                              : ""}
+                          </Badge>
+                        ))}
+                      </div>
+                    </div>
+                  ) : null}
 
-            <div className="kvRow">
-              <div className="kvLabel">Мультиф.</div>
-              <div className="kvValue">{boolLabel(calcInput.glassOptions?.multiFunctional)}</div>
-            </div>
-
-            <div className="kvRow">
-              <div className="kvLabel">Дизайн</div>
-              <div className="kvValue">
-                {(() => {
-                  const lamination = normalizeCode(calcInput.lamination);
-                  if (!lamination || lamination === "none") return DESIGN_OPTION_LABELS.none;
-                  if (lamination === "oneside") {
-                    const side = normalizeCode(calcInput.laminationSide);
-                    if (side === "inside") return DESIGN_OPTION_LABELS.inside;
-                    return DESIGN_OPTION_LABELS.outside;
-                  }
-                  if (lamination === "twoside") {
-                    const group = normalizeCode(calcInput.laminationGroup);
-                    if (group === "color") return DESIGN_OPTION_LABELS.twoSideColor;
-                    if (group === "wood") return DESIGN_OPTION_LABELS.twoSideWood;
-                    return DESIGN_OPTION_LABELS.twoSideWhite;
-                  }
-                  return "-";
-                })()}
-              </div>
-            </div>
-
-            {calcInput.laminationColor ? (
-              <div className="kvRow">
-                <div className="kvLabel">Цвет</div>
-                <div className="kvValue">
-                  {LAMINATION_COLOR_LABELS[normalizeCode(calcInput.laminationColor)] ?? calcInput.laminationColor}
-                </div>
-              </div>
-            ) : null}
-
-            {calcInput.entranceOptions ? (
-              <>
-                <div className="kvRow">
-                  <div className="kvLabel">Наполнение (верх)</div>
-                  <div className="kvValue">
-                    {labelOrFallback(ENTRANCE_FILL_LABELS, calcInput.entranceOptions.fillTop ?? calcInput.entranceOptions.fillType)}
+                  <div className="grid gap-2">
+                    <div className="text-sm font-medium text-foreground">Комплектующие</div>
+                    {optionsFiltered.length ? (
+                      <div className="flex flex-wrap gap-2">
+                        {optionsFiltered.map((opt) => (
+                          <Badge key={opt} variant="secondary">
+                            {optionLabel(opt, calcInput)}
+                          </Badge>
+                        ))}
+                      </div>
+                    ) : (
+                      <div className="text-sm text-muted-foreground">-</div>
+                    )}
                   </div>
                 </div>
-                <div className="kvRow">
-                  <div className="kvLabel">Наполнение (низ)</div>
-                  <div className="kvValue">
-                    {labelOrFallback(ENTRANCE_FILL_LABELS, calcInput.entranceOptions.fillBottom ?? calcInput.entranceOptions.fillType)}
-                  </div>
-                </div>
-              </>
+              </SectionCard>
             ) : null}
 
-            <div className="kvRow">
-              <div className="kvLabel">Монтаж</div>
-              <div className="kvValue">{boolLabel(calcInput.services?.installEnabled)}</div>
-            </div>
-
-            <div className="kvRow">
-              <div className="kvLabel">Доставка</div>
-              <div className="kvValue">{boolLabel(calcInput.services?.deliveryEnabled)}</div>
-            </div>
-
-            {calcInput.services?.deliveryEnabled ? (
-              <div className="kvRow">
-                <div className="kvLabel">Доставка, км</div>
-                <div className="kvValue">
-                  {typeof calcInput.services?.deliveryKm === "number" ? String(calcInput.services.deliveryKm) : "-"}
-                </div>
-              </div>
-            ) : null}
-
-            <div className="kvRow">
-              <div className="kvLabel">Комплектующие</div>
-              <div className="kvValue">
-                {optionsFiltered.length ? (
-                  <div className="pillList">
-                    {optionsFiltered.map((opt) => (
-                      <span key={opt} className="pill">
-                        {optionLabel(opt, calcInput)}
-                      </span>
-                    ))}
-                  </div>
-                ) : (
-                  "-"
-                )}
-              </div>
-            </div>
-          </div>
-        </section>
-      ) : null}
-
-      {quote ? (
-        <section className="card">
-          <h2>Служебная информация</h2>
-          <div className="kv" style={{ marginTop: 10 }}>
-            <div className="kvRow">
-              <div className="kvLabel">UID</div>
-              <div className="kvValue breakLong">{quote.uid || "-"}</div>
-            </div>
-            {userProfile ? (
-              <>
-                {userProfile.displayName ? (
-                  <div className="kvRow">
-                    <div className="kvLabel">Профиль</div>
-                    <div className="kvValue breakLong">{userProfile.displayName}</div>
-                  </div>
-                ) : null}
-                {userProfile.email ? (
-                  <div className="kvRow">
-                    <div className="kvLabel">Email</div>
-                    <div className="kvValue breakLong">{userProfile.email}</div>
-                  </div>
-                ) : null}
-                {userProfile.phone ? (
-                  <div className="kvRow">
-                    <div className="kvLabel">Телефон</div>
-                    <div className="kvValue breakLong">{userProfile.phone}</div>
-                  </div>
-                ) : null}
-                {userProfile.locale ? (
-                  <div className="kvRow">
-                    <div className="kvLabel">Locale</div>
-                    <div className="kvValue breakLong">{userProfile.locale}</div>
-                  </div>
-                ) : null}
-              </>
-            ) : null}
-            <div className="kvRow">
-              <div className="kvLabel">Создано</div>
-              <div className="kvValue">{formatDateTime(quote.createdAt)}</div>
-            </div>
-            <div className="kvRow">
-              <div className="kvLabel">Обновлено</div>
-              <div className="kvValue">{formatDateTime(quote.updatedAt)}</div>
-            </div>
-          </div>
-        </section>
-      ) : null}
+            <SectionCard
+              eyebrow="Системные данные"
+              title="Служебная информация"
+              description="Технические поля профиля и метки времени для внутренней работы."
+              icon={ShieldCheck}
+              tone="sky"
+            >
+              <DetailRows
+                columns={2}
+                items={[
+                  { label: "UID", value: quote.uid || "-" },
+                  ...(userProfile?.displayName ? [{ label: "Профиль", value: userProfile.displayName }] : []),
+                  ...(userProfile?.email ? [{ label: "Email", value: userProfile.email }] : []),
+                  ...(userProfile?.phone ? [{ label: "Телефон", value: userProfile.phone }] : []),
+                  ...(userProfile?.locale ? [{ label: "Locale", value: userProfile.locale }] : []),
+                  { label: "Создано", value: formatDateTime(quote.createdAt) },
+                  { label: "Обновлено", value: formatDateTime(quote.updatedAt) },
+                ]}
+              />
+            </SectionCard>
+          </>
+        ) : (
+          <EmptyState title="Заявка не найдена" description="Лид мог быть удалён, либо в адресной строке отсутствует корректный идентификатор." />
+        )}
+      </div>
     </AdminShell>
   );
 }

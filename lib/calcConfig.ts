@@ -1,23 +1,32 @@
-import type { OptionPrice, WindowGeometryConfig } from "window-door-store-calc-engine";
+import {
+  getDefaultCalcConfig,
+  type GlassOptionCatalogItem,
+  type GlassOptionsInput,
+  type HardwareOptionCatalogItem,
+  type OptionPrice,
+  type ProfileModelCatalogItem,
+  type WindowGeometryConfig,
+} from "window-door-store-calc-engine";
 
-export const DEFAULT_BASE_RATE = 120;
+export const DEFAULT_BASE_RATE = 13000;
 
 export type CalcConfigFull = {
   baseRates: Record<string, number>;
   coefficients: {
     material: Record<string, number>;
+    profileModel: Record<string, number>;
     profileSeries: Record<string, number>;
     profileDepthMm: Record<string, number>;
     glazing: Record<string, number>;
     lamination: Record<string, number>;
     laminationGroup: Record<string, number>;
     laminationSide: Record<string, number>;
-    glassOptions: {
-      energySaving?: number;
-      multiFunctional?: number;
-    };
+    laminationColor: Record<string, number>;
+    glassOptions: Partial<Record<keyof GlassOptionsInput, number>>;
     door: {
       fillType: Record<string, number>;
+      fillTop: Record<string, number>;
+      fillBottom: Record<string, number>;
     };
   };
   options: Record<string, OptionPrice>;
@@ -38,6 +47,11 @@ export type CalcConfigFull = {
   roundingRules: {
     step: number;
   };
+  uiCatalog: {
+    profileModels: ProfileModelCatalogItem[];
+    glassOptions: GlassOptionCatalogItem[];
+    hardwareOptions: HardwareOptionCatalogItem[];
+  };
   windowGeometry: WindowGeometryConfig;
 };
 
@@ -49,7 +63,8 @@ export type NormalizedCalcConfig = {
   warnings: string[];
 };
 
-const ROOT_KEYS = new Set(["baseRates", "coefficients", "options", "fees", "roundingRules", "windowGeometry"]);
+const ROOT_KEYS = new Set(["baseRates", "coefficients", "options", "fees", "roundingRules", "uiCatalog", "windowGeometry"]);
+const LEGACY_ONLY_KEYS = new Set(["version", "currencyRules"]);
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   if (!value || typeof value !== "object") return false;
@@ -60,6 +75,22 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 function toFiniteNumber(value: unknown): number | null {
   const num = typeof value === "number" ? value : Number(value);
   return Number.isFinite(num) ? num : null;
+}
+
+function looksLikeLegacyCalcConfig(raw: Record<string, unknown>): boolean {
+  const version = toFiniteNumber(raw.version);
+  if (version === 1) return true;
+  if (isRecord(raw.currencyRules)) return true;
+
+  const baseRates = isRecord(raw.baseRates)
+    ? Object.values(raw.baseRates)
+        .map((value) => toFiniteNumber(value))
+        .filter((value): value is number => value !== null)
+    : [];
+  if (baseRates.length && Math.max(...baseRates) <= 500) return true;
+
+  const optionKeys = isRecord(raw.options) ? Object.keys(raw.options).map((key) => key.trim().toLowerCase()) : [];
+  return optionKeys.some((key) => key === "mosquito" || key === "warm_installation" || key === "lamination");
 }
 
 function readNumberMap(source: unknown, warnings: string[], label: string): Record<string, number> {
@@ -148,39 +179,87 @@ function readWindowGeometry(
 }
 
 export function getDefaultCalcConfigFull(): CalcConfigFull {
+  const defaults = getDefaultCalcConfig();
+  const defaultOptions: Record<string, OptionPrice> = {};
+  for (const [key, value] of Object.entries(defaults.options ?? {})) {
+    defaultOptions[key] = typeof value === "number" ? value : { ...value };
+  }
+
   return {
-    baseRates: { default: DEFAULT_BASE_RATE },
+    baseRates: {
+      ...(defaults.baseRates ?? { default: DEFAULT_BASE_RATE }),
+    },
     coefficients: {
-      material: {},
-      profileSeries: {},
-      profileDepthMm: {},
-      glazing: {},
-      lamination: {},
-      laminationGroup: {},
-      laminationSide: {},
-      glassOptions: {},
+      material: {
+        ...(defaults.coefficients?.material ?? {}),
+      },
+      profileModel: {
+        ...(defaults.coefficients?.profileModel ?? {}),
+      },
+      profileSeries: {
+        ...(defaults.coefficients?.profileSeries ?? {}),
+      },
+      profileDepthMm: {
+        ...(defaults.coefficients?.profileDepthMm ?? {}),
+      },
+      glazing: {
+        ...(defaults.coefficients?.glazing ?? {}),
+      },
+      lamination: {
+        ...(defaults.coefficients?.lamination ?? {}),
+      },
+      laminationGroup: {
+        ...(defaults.coefficients?.laminationGroup ?? {}),
+      },
+      laminationSide: {
+        ...(defaults.coefficients?.laminationSide ?? {}),
+      },
+      laminationColor: {
+        ...(defaults.coefficients?.laminationColor ?? {}),
+      },
+      glassOptions: {
+        ...(defaults.coefficients?.glassOptions ?? {}),
+      },
       door: {
-        fillType: {},
+        fillType: {
+          ...(defaults.coefficients?.door?.fillType ?? {}),
+        },
+        fillTop: {
+          ...(defaults.coefficients?.door?.fillTop ?? {}),
+        },
+        fillBottom: {
+          ...(defaults.coefficients?.door?.fillBottom ?? {}),
+        },
       },
     },
-    options: {},
+    options: defaultOptions,
     fees: {
-      openingSash: { turn: 0, tiltTurn: 0 },
-      meetingPairKit: 0,
-      mullionPerM: 0,
-      install: { perM2: 0, perSash: 0 },
-      delivery: { base: 0, freeKm: 0, perKm: 0 },
+      openingSash: {
+        turn: defaults.fees?.openingSash?.turn ?? 0,
+        tiltTurn: defaults.fees?.openingSash?.tiltTurn ?? 0,
+      },
+      meetingPairKit: defaults.fees?.meetingPairKit ?? 0,
+      mullionPerM: defaults.fees?.mullionPerM ?? 0,
+      install: {
+        perM2: defaults.fees?.install?.perM2 ?? 0,
+        perSash: defaults.fees?.install?.perSash ?? 0,
+      },
+      delivery: {
+        base: defaults.fees?.delivery?.base ?? 0,
+        freeKm: defaults.fees?.delivery?.freeKm ?? 0,
+        perKm: defaults.fees?.delivery?.perKm ?? 0,
+      },
     },
-    roundingRules: { step: 1 },
+    roundingRules: {
+      step: defaults.roundingRules?.step ?? 1,
+    },
+    uiCatalog: {
+      profileModels: defaults.uiCatalog?.profileModels ?? [],
+      glassOptions: defaults.uiCatalog?.glassOptions ?? [],
+      hardwareOptions: defaults.uiCatalog?.hardwareOptions ?? [],
+    },
     windowGeometry: {
-      Fw_mm: 70,
-      Fh_mm: 70,
-      Mw_mm: 60,
-      minSashW_mm: 300,
-      minSashH_mm: 400,
-      minFixedW_mm: 200,
-      glassInsetW_mm: 0,
-      glassInsetH_mm: 0,
+      ...(defaults.windowGeometry ?? {}),
     },
   };
 }
@@ -193,43 +272,48 @@ export function normalizeCalcConfig(raw: unknown): NormalizedCalcConfig {
     return { config: defaults, extras: {}, warnings };
   }
 
+  const legacyConfig = looksLikeLegacyCalcConfig(raw);
   const extras: Record<string, unknown> = {};
   for (const [key, value] of Object.entries(raw)) {
+    if (legacyConfig && LEGACY_ONLY_KEYS.has(key)) continue;
     if (!ROOT_KEYS.has(key)) extras[key] = value;
+  }
+
+  if (legacyConfig) {
+    warnings.push("Обнаружена устаревшая конфигурация v1. Применена новая рыночная модель по умолчанию.");
+    return { config: defaults, extras, warnings };
   }
 
   const baseRates = readNumberMap(raw.baseRates, warnings, "baseRates");
   if (baseRates.default == null) {
     baseRates.default = DEFAULT_BASE_RATE;
-    warnings.push("baseRates.default: не задано, использую 120");
+    warnings.push(`baseRates.default: не задано, использую ${DEFAULT_BASE_RATE}`);
   }
 
   const coeffRaw = raw.coefficients;
   const coefficients: CalcConfigFull["coefficients"] = {
     material: readNumberMap(isRecord(coeffRaw) ? coeffRaw.material : undefined, warnings, "coefficients.material"),
+    profileModel: readNumberMap(isRecord(coeffRaw) ? coeffRaw.profileModel : undefined, warnings, "coefficients.profileModel"),
     profileSeries: readNumberMap(isRecord(coeffRaw) ? coeffRaw.profileSeries : undefined, warnings, "coefficients.profileSeries"),
     profileDepthMm: readNumberMap(isRecord(coeffRaw) ? coeffRaw.profileDepthMm : undefined, warnings, "coefficients.profileDepthMm"),
     glazing: readNumberMap(isRecord(coeffRaw) ? coeffRaw.glazing : undefined, warnings, "coefficients.glazing"),
     lamination: readNumberMap(isRecord(coeffRaw) ? coeffRaw.lamination : undefined, warnings, "coefficients.lamination"),
     laminationGroup: readNumberMap(isRecord(coeffRaw) ? coeffRaw.laminationGroup : undefined, warnings, "coefficients.laminationGroup"),
     laminationSide: readNumberMap(isRecord(coeffRaw) ? coeffRaw.laminationSide : undefined, warnings, "coefficients.laminationSide"),
-    glassOptions: {},
+    laminationColor: readNumberMap(isRecord(coeffRaw) ? coeffRaw.laminationColor : undefined, warnings, "coefficients.laminationColor"),
+    glassOptions: readNumberMap(isRecord(coeffRaw) ? coeffRaw.glassOptions : undefined, warnings, "coefficients.glassOptions"),
     door: {
       fillType: {},
+      fillTop: {},
+      fillBottom: {},
     },
   };
-
-  const glassOptionsRaw = isRecord(coeffRaw) ? coeffRaw.glassOptions : undefined;
-  if (isRecord(glassOptionsRaw)) {
-    const energySaving = toFiniteNumber(glassOptionsRaw.energySaving);
-    const multiFunctional = toFiniteNumber(glassOptionsRaw.multiFunctional);
-    if (energySaving !== null) coefficients.glassOptions.energySaving = energySaving;
-    if (multiFunctional !== null) coefficients.glassOptions.multiFunctional = multiFunctional;
-  }
 
   const doorCoeffRaw = isRecord(coeffRaw) ? coeffRaw.door : undefined;
   if (isRecord(doorCoeffRaw)) {
     coefficients.door.fillType = readNumberMap(doorCoeffRaw.fillType, warnings, "coefficients.door.fillType");
+    coefficients.door.fillTop = readNumberMap(doorCoeffRaw.fillTop, warnings, "coefficients.door.fillTop");
+    coefficients.door.fillBottom = readNumberMap(doorCoeffRaw.fillBottom, warnings, "coefficients.door.fillBottom");
   }
 
   const options = readOptionMap(raw.options, warnings, "options");
@@ -266,6 +350,20 @@ export function normalizeCalcConfig(raw: unknown): NormalizedCalcConfig {
         delivery: { base: deliveryBase, freeKm: deliveryFreeKm, perKm: deliveryPerKm },
       },
       roundingRules: { step: step && step > 0 ? step : defaults.roundingRules.step },
+      uiCatalog: {
+        profileModels:
+          isRecord(raw.uiCatalog) && Array.isArray(raw.uiCatalog.profileModels)
+            ? raw.uiCatalog.profileModels
+            : defaults.uiCatalog.profileModels,
+        glassOptions:
+          isRecord(raw.uiCatalog) && Array.isArray(raw.uiCatalog.glassOptions)
+            ? raw.uiCatalog.glassOptions
+            : defaults.uiCatalog.glassOptions,
+        hardwareOptions:
+          isRecord(raw.uiCatalog) && Array.isArray(raw.uiCatalog.hardwareOptions)
+            ? raw.uiCatalog.hardwareOptions
+            : defaults.uiCatalog.hardwareOptions,
+      },
       windowGeometry,
     },
     extras,

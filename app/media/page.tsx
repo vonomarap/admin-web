@@ -1,7 +1,7 @@
 "use client";
 
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { signOut } from "firebase/auth";
+import { ImageIcon, Upload } from "lucide-react";
 import {
   collection,
   deleteDoc,
@@ -13,11 +13,19 @@ import {
   startAfter,
 } from "firebase/firestore";
 import type { QueryDocumentSnapshot } from "firebase/firestore";
-import { auth, db } from "../../lib/firebase";
+import { toast } from "sonner";
+import { db } from "../../lib/firebase";
 import { uploadMediaFile, type MediaFolder } from "../../lib/media";
+import { useConfirmDialog } from "../../components/ConfirmDialogProvider";
 import { useAdminSession } from "../../components/AdminSessionProvider";
 import { AdminLoginScreen, LoadingScreen, MissingConfigScreen, NoAccessScreen } from "../../components/AdminScreens";
 import { AdminShell } from "../../components/AdminShell";
+import { EmptyState, FieldBlock, InlineMeta, PageAlert, SectionCard, ToneBadge } from "../../components/admin-kit";
+import { Badge } from "../../components/ui/badge";
+import { Button } from "../../components/ui/button";
+import { Card, CardContent, CardHeader, CardTitle } from "../../components/ui/card";
+import { Input } from "../../components/ui/input";
+import { NativeSelect } from "../../components/ui/native-select";
 import {
   clearGithubMediaConfig,
   githubDeleteFile,
@@ -114,6 +122,7 @@ function formatCreatedAt(value: any): string {
 
 export default function MediaPage(): JSX.Element {
   const session = useAdminSession();
+  const confirm = useConfirmDialog();
 
   const pickerRef = useRef<HTMLInputElement | null>(null);
   const [uploadFolder, setUploadFolder] = useState<MediaFolder>("gallery");
@@ -266,11 +275,16 @@ export default function MediaPage(): JSX.Element {
   const onDelete = async (item: MediaItem) => {
     if (!db) return;
     const title = item.name || item.path || item.id;
-    const ok = confirm(`Удалить файл "${title}"? Это действие необратимо.`);
+    const ok = await confirm({
+      title: `Удалить файл "${title}"?`,
+      description: "Файл удалится из GitHub-хранилища и из Firestore.",
+      confirmLabel: "Удалить",
+      variant: "destructive",
+    });
     if (!ok) return;
 
     if (!isGithubMediaConfigReady(githubConfig)) {
-      alert("GitHub хранилище не настроено. Сначала сохраните настройки GitHub.");
+      toast.error("GitHub хранилище не настроено. Сначала сохраните настройки GitHub.");
       return;
     }
 
@@ -285,7 +299,7 @@ export default function MediaPage(): JSX.Element {
       await loadMedia({ mode: "reset" });
     } catch (error) {
       console.error("Media delete failed:", error);
-      alert(error instanceof Error ? error.message : String(error));
+      toast.error(error instanceof Error ? error.message : String(error));
     }
   };
 
@@ -315,7 +329,12 @@ export default function MediaPage(): JSX.Element {
   };
 
   const clearGithub = async () => {
-    const ok = confirm("Очистить настройки GitHub на этом устройстве?");
+    const ok = await confirm({
+      title: "Очистить настройки GitHub?",
+      description: "Локальные настройки на этом устройстве будут удалены.",
+      confirmLabel: "Очистить",
+      variant: "destructive",
+    });
     if (!ok) return;
     clearGithubMediaConfig();
     setGithubConfig({
@@ -352,151 +371,158 @@ export default function MediaPage(): JSX.Element {
   };
 
   const uploadPanel = (
-    <div className="editPanel">
-      <div className="editGrid">
-        <div className="field" style={{ gridColumn: "1 / -1" }}>
-          <div className="fieldLabel">GitHub (хранилище изображений)</div>
-          <div style={{ display: "grid", gap: 10 }}>
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
-              <input
-                placeholder="owner (например: my-username)"
+    <div className="grid gap-6">
+      <Card className="border-border/70 bg-background/60">
+        <CardHeader className="gap-1">
+          <CardTitle className="text-lg">GitHub-хранилище</CardTitle>
+        </CardHeader>
+        <CardContent className="grid gap-4 pt-0">
+          <div className="grid gap-4 md:grid-cols-2">
+            <FieldBlock label="Owner">
+              <Input
+                placeholder="my-username"
                 value={githubConfig.owner}
                 onChange={(e) => setGithubConfig((prev) => ({ ...prev, owner: e.target.value }))}
                 disabled={savingGithub || testingGithub}
               />
-              <input
-                placeholder="repo (например: kanokna-media)"
+            </FieldBlock>
+            <FieldBlock label="Repo">
+              <Input
+                placeholder="kanokna-media"
                 value={githubConfig.repo}
                 onChange={(e) => setGithubConfig((prev) => ({ ...prev, repo: e.target.value }))}
                 disabled={savingGithub || testingGithub}
               />
-            </div>
-
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
-              <input
-                placeholder="branch (например: main)"
+            </FieldBlock>
+            <FieldBlock label="Branch">
+              <Input
+                placeholder="main"
                 value={githubConfig.branch}
                 onChange={(e) => setGithubConfig((prev) => ({ ...prev, branch: e.target.value }))}
                 disabled={savingGithub || testingGithub}
               />
-              <select
+            </FieldBlock>
+            <FieldBlock label="URL mode">
+              <NativeSelect
                 value={githubConfig.urlMode}
                 onChange={(e) => setGithubConfig((prev) => ({ ...prev, urlMode: e.target.value as any }))}
                 disabled={savingGithub || testingGithub}
               >
                 <option value="raw">raw.githubusercontent.com</option>
                 <option value="jsdelivr">jsDelivr (CDN)</option>
-              </select>
-            </div>
+              </NativeSelect>
+            </FieldBlock>
+          </div>
 
-            <input
+          <FieldBlock label="Token" description="Fine-grained PAT с Contents: Read and write.">
+            <Input
               type="password"
-              placeholder="token (fine-grained PAT с доступом к Contents: Read and write)"
+              placeholder="GitHub token"
               value={githubConfig.token}
               onChange={(e) => setGithubConfig((prev) => ({ ...prev, token: e.target.value }))}
               disabled={savingGithub || testingGithub}
             />
+          </FieldBlock>
 
-            <details>
-              <summary style={{ cursor: "pointer" }}>Дополнительно</summary>
-              <div style={{ marginTop: 10, display: "grid", gap: 10 }}>
-                <input
-                  placeholder='Папка в репозитории (опционально), например: "assets"'
-                  value={githubConfig.basePath}
-                  onChange={(e) => setGithubConfig((prev) => ({ ...prev, basePath: e.target.value }))}
-                  disabled={savingGithub || testingGithub}
-                />
-                <small>
-                  Обычно оставьте пустым. Тогда файлы будут лежать в <span className="breakLong">/media/...</span>
-                </small>
-              </div>
-            </details>
+          <FieldBlock
+            label="Базовая папка"
+            description="Обычно оставьте пустым. Тогда файлы будут сохраняться в `/media/...`."
+          >
+            <Input
+              placeholder='Например: "assets"'
+              value={githubConfig.basePath}
+              onChange={(e) => setGithubConfig((prev) => ({ ...prev, basePath: e.target.value }))}
+              disabled={savingGithub || testingGithub}
+            />
+          </FieldBlock>
 
-            <div className="rowActions" style={{ justifyContent: "flex-end" }}>
-              <button type="button" className="secondary" onClick={() => void testGithub()} disabled={testingGithub || savingGithub}>
-                Проверить
-              </button>
-              <button type="button" className="secondary" onClick={() => void saveGithub()} disabled={savingGithub}>
-                Сохранить
-              </button>
-              <button type="button" className="danger" onClick={() => void clearGithub()} disabled={savingGithub || testingGithub}>
-                Очистить
-              </button>
-            </div>
-
-            {githubNotice ? <small>{githubNotice}</small> : null}
-            {githubError ? <div className="errorBox">{githubError}</div> : null}
+          <div className="flex flex-wrap justify-end gap-2">
+            <Button type="button" variant="outline" onClick={() => void testGithub()} disabled={testingGithub || savingGithub}>
+              Проверить
+            </Button>
+            <Button type="button" variant="outline" onClick={() => void saveGithub()} disabled={savingGithub}>
+              Сохранить
+            </Button>
+            <Button type="button" variant="destructive" onClick={() => void clearGithub()} disabled={savingGithub || testingGithub}>
+              Очистить
+            </Button>
           </div>
-        </div>
 
-        <div className="field">
-          <div className="fieldLabel">Папка</div>
-          <select value={uploadFolder} onChange={(e) => setUploadFolder(e.target.value as MediaFolder)} disabled={uploading}>
-            {FOLDERS.map((f) => (
-              <option key={f.key} value={f.key}>
-                {f.label}
-              </option>
-            ))}
-          </select>
-          <small>
-            Файлы сохраняются в GitHub:{" "}
-            <span className="breakLong">
-              {githubReady ? `${githubConfig.owner}/${githubConfig.repo} (${githubConfig.branch})` : "не настроено"}
-            </span>{" "}
-            → <span className="breakLong">{fullPathPreview}</span>
-          </small>
-        </div>
+          {githubNotice ? <PageAlert title="Статус GitHub" description={githubNotice} variant="default" /> : null}
+          {githubError ? <PageAlert title="Ошибка GitHub" description={githubError} /> : null}
+        </CardContent>
+      </Card>
 
-        <div className="field">
-          <div className="fieldLabel">Загрузка</div>
-          <input
-            ref={pickerRef}
-            type="file"
-            accept="image/*"
-            multiple
-            disabled={!canUpload || uploading}
-            onChange={(e) => onPick(e.currentTarget.files)}
+      <Card className="border-border/70 bg-background/60">
+        <CardHeader className="gap-1">
+          <CardTitle className="text-lg">Загрузка изображений</CardTitle>
+        </CardHeader>
+        <CardContent className="grid gap-4 pt-0">
+          <div className="grid gap-4 md:grid-cols-2">
+            <FieldBlock label="Папка назначения">
+              <NativeSelect value={uploadFolder} onChange={(e) => setUploadFolder(e.target.value as MediaFolder)} disabled={uploading}>
+                {FOLDERS.map((f) => (
+                  <option key={f.key} value={f.key}>
+                    {f.label}
+                  </option>
+                ))}
+              </NativeSelect>
+            </FieldBlock>
+            <FieldBlock label="Выбор файлов" description="Можно выбрать сразу несколько изображений.">
+              <Input
+                ref={pickerRef}
+                type="file"
+                accept="image/*"
+                multiple
+                disabled={!canUpload || uploading}
+                onChange={(e) => onPick(e.currentTarget.files)}
+              />
+            </FieldBlock>
+          </div>
+
+          <InlineMeta
+            items={[
+              githubReady ? `${githubConfig.owner}/${githubConfig.repo} (${githubConfig.branch})` : "GitHub не настроен",
+              fullPathPreview,
+              canUpload ? "Загрузка доступна" : "Сначала сохраните GitHub-конфиг",
+            ]}
           />
-          <small>Можно выбрать сразу несколько файлов.</small>
-        </div>
-      </div>
 
-      <div
-        onDragOver={(e) => {
-          e.preventDefault();
-          if (!canUpload || uploading) return;
-          setDragOver(true);
-        }}
-        onDragLeave={() => setDragOver(false)}
-        onDrop={(e) => {
-          e.preventDefault();
-          setDragOver(false);
-          if (!canUpload || uploading) return;
-          const files = Array.from(e.dataTransfer.files || []).filter((file) => file.type.startsWith("image/"));
-          void onUploadFiles(files);
-        }}
-        style={{
-          padding: 12,
-          borderRadius: 16,
-          border: `1px dashed ${dragOver ? "rgba(249, 115, 22, 0.55)" : "rgba(11, 18, 32, 0.18)"}`,
-          background: dragOver ? "rgba(249, 115, 22, 0.08)" : "rgba(255, 255, 255, 0.08)",
-          textAlign: "center",
-          userSelect: "none",
-        }}
-      >
-        <b>Перетащите фото сюда</b>
-        <div>
-          <small>Только изображения (image/*)</small>
-        </div>
-      </div>
+          <div
+            onDragOver={(e) => {
+              e.preventDefault();
+              if (!canUpload || uploading) return;
+              setDragOver(true);
+            }}
+            onDragLeave={() => setDragOver(false)}
+            onDrop={(e) => {
+              e.preventDefault();
+              setDragOver(false);
+              if (!canUpload || uploading) return;
+              const files = Array.from(e.dataTransfer.files || []).filter((file) => file.type.startsWith("image/"));
+              void onUploadFiles(files);
+            }}
+            className="rounded-2xl border border-dashed px-6 py-10 text-center transition-colors"
+            style={{
+              borderColor: dragOver ? "rgba(249, 115, 22, 0.55)" : "rgba(148, 163, 184, 0.35)",
+              background: dragOver ? "rgba(249, 115, 22, 0.08)" : "rgba(255, 255, 255, 0.04)",
+            }}
+          >
+            <div className="grid gap-2">
+              <div className="text-base font-medium">Перетащите фото сюда</div>
+              <div className="text-sm text-muted-foreground">Только изображения (`image/*`).</div>
+            </div>
+          </div>
 
-      {uploadInfo ? (
-        <small>
-          Загрузка {uploadInfo.index}/{uploadInfo.total} · {Math.round(uploadInfo.pct)}%
-        </small>
-      ) : null}
+          {uploadInfo ? (
+            <ToneBadge tone="secondary">
+              Загрузка {uploadInfo.index}/{uploadInfo.total} · {Math.round(uploadInfo.pct)}%
+            </ToneBadge>
+          ) : null}
 
-      {uploadError ? <div className="errorBox">{uploadError}</div> : null}
+          {uploadError ? <PageAlert title="Ошибка загрузки" description={uploadError} /> : null}
+        </CardContent>
+      </Card>
     </div>
   );
 
@@ -510,147 +536,125 @@ export default function MediaPage(): JSX.Element {
       title="Медиа"
       subtitle={session.user?.email ?? ""}
       rightActions={
-        <>
-          <button className="secondary" onClick={() => pickerRef.current?.click()} disabled={!canUpload || uploading}>
-            Загрузить
-          </button>
-          <button className="secondary" onClick={() => void loadMedia({ mode: "reset" })} disabled={loadingData}>
-            Обновить
-          </button>
-          <button onClick={() => void signOut(auth!)} disabled={!auth}>
-            Выйти
-          </button>
-        </>
+        <Button variant="secondary" onClick={() => pickerRef.current?.click()} disabled={!canUpload || uploading}>
+          Загрузить
+        </Button>
       }
     >
-      {loadError ? (
-        <section className="card noticeCard noticeCard-error">
-          <h3 style={{ marginBottom: 6 }}>Ошибка загрузки данных</h3>
-          <small className="noticeText-danger">{loadError}</small>
-        </section>
-      ) : null}
+      {loadError ? <PageAlert title="Ошибка загрузки данных" description={loadError} /> : null}
 
-      <section className="card">
-        <div className="rowActions" style={{ justifyContent: "space-between" }}>
-          <div style={{ display: "grid", gap: 2 }}>
-            <h2>Загрузка файлов</h2>
-            <small>Ссылки можно использовать в товарах, галерее, акциях и настройках сайта.</small>
-          </div>
-          <small>Доступ: только админ.</small>
-        </div>
+      <SectionCard
+        eyebrow="Только для админов"
+        title="Загрузка файлов"
+        description="Ссылки из этой секции можно использовать в товарах, галерее, акциях и настройках сайта."
+        icon={Upload}
+        tone="violet"
+        actions={
+          <>
+            <ToneBadge tone={githubReady ? "success" : "muted"}>{githubReady ? "GitHub готов" : "GitHub не настроен"}</ToneBadge>
+            <Badge variant="outline">Доступ: admin</Badge>
+          </>
+        }
+      >
         {uploadPanel}
-      </section>
+      </SectionCard>
 
-      <section className="card">
-        <div className="rowActions" style={{ justifyContent: "space-between" }}>
-          <div style={{ display: "grid", gap: 2 }}>
-            <h2>Файлы</h2>
-            <small>{items.length} шт.</small>
-          </div>
-          <div className="rowActions">
+      <SectionCard
+        eyebrow="Firestore + GitHub"
+        title="Файлы"
+        description="Каталог загруженных изображений. Удаление убирает файл и из GitHub-хранилища, и из Firestore."
+        icon={ImageIcon}
+        tone="violet"
+        actions={
+          <>
+            <Badge variant="outline">{items.length} шт.</Badge>
             {hasMore ? (
-              <button className="secondary" onClick={() => void loadMedia({ mode: "more" })} disabled={loadingData}>
+              <Button variant="outline" onClick={() => void loadMedia({ mode: "more" })} disabled={loadingData}>
                 Ещё
-              </button>
+              </Button>
             ) : null}
-          </div>
-        </div>
+          </>
+        }
+      >
+        {items.length ? (
+          <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+            {items.map((item) => {
+              const url = typeof item.url === "string" ? item.url : "";
+              const path = typeof item.path === "string" ? item.path : "";
+              const folderKey = typeof item.folder === "string" ? item.folder : "";
+              const folder = folderKey ? folderLabel(folderKey) : "-";
+              const name = typeof item.name === "string" ? item.name : item.id;
 
-        <div style={{ marginTop: 12 }}>
-          {items.length ? (
-            <div className="cardList">
-              {items.map((item) => {
-                const url = typeof item.url === "string" ? item.url : "";
-                const path = typeof item.path === "string" ? item.path : "";
-                const folderKey = typeof item.folder === "string" ? item.folder : "";
-                const folder = folderKey ? folderLabel(folderKey) : "-";
-                const name = typeof item.name === "string" ? item.name : item.id;
-
-                return (
-                  <div key={item.id} className="itemCard">
-                    <div className="itemHeader">
-                      <div style={{ display: "grid", gap: 2, minWidth: 0 }}>
-                        <b className="breakLong">{name}</b>
-                        <small className="breakLong">{path || item.id}</small>
+              return (
+                <Card key={item.id} className="border-border/70 bg-background/70">
+                  <CardHeader className="gap-3">
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="grid gap-1">
+                        <CardTitle className="break-all text-base">{name}</CardTitle>
+                        <div className="break-all text-xs text-muted-foreground">{path || item.id}</div>
                       </div>
-                      <span className="badge">{folder}</span>
+                      <ToneBadge tone="outline">{folder}</ToneBadge>
+                    </div>
+                  </CardHeader>
+                  <CardContent className="grid gap-4 pt-0">
+                    <div
+                      className="overflow-hidden rounded-2xl border border-border/70 bg-muted/30"
+                      style={{ aspectRatio: "16 / 10" }}
+                      title={url || undefined}
+                    >
+                      {url ? (
+                        <img
+                          src={url}
+                          alt=""
+                          loading="lazy"
+                          decoding="async"
+                          referrerPolicy="no-referrer"
+                          style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }}
+                        />
+                      ) : null}
                     </div>
 
-                    <div className="rowActions" style={{ alignItems: "flex-start", gap: 12 }}>
-                      <div
-                        style={{
-                          width: 84,
-                          height: 84,
-                          borderRadius: 16,
-                          border: "1px solid rgba(249, 115, 22, 0.18)",
-                          background: "rgba(255, 255, 255, 0.08)",
-                          overflow: "hidden",
-                          flex: "0 0 auto",
-                        }}
-                        title={url || undefined}
-                      >
-                        {url ? (
-                          <img
-                            src={url}
-                            alt=""
-                            loading="lazy"
-                            decoding="async"
-                            referrerPolicy="no-referrer"
-                            style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }}
-                          />
-                        ) : null}
-                      </div>
-
-                      <div className="kv" style={{ flex: 1, minWidth: 0 }}>
-                        <div className="kvRow">
-                          <div className="kvLabel">Размер</div>
-                          <div className="kvValue">{formatBytes(item.size)}</div>
-                        </div>
-                        <div className="kvRow">
-                          <div className="kvLabel">Тип</div>
-                          <div className="kvValue">{item.contentType || "-"}</div>
-                        </div>
-                        <div className="kvRow">
-                          <div className="kvLabel">Дата</div>
-                          <div className="kvValue">{formatCreatedAt(item.createdAt)}</div>
-                        </div>
-                        <div className="kvRow">
-                          <div className="kvLabel">URL</div>
-                          <div className="kvValue breakLong">{url || "-"}</div>
-                        </div>
-                      </div>
+                    <div className="grid gap-3 sm:grid-cols-2">
+                      <FieldBlock label="Размер">
+                        <div className="text-sm text-muted-foreground">{formatBytes(item.size)}</div>
+                      </FieldBlock>
+                      <FieldBlock label="Тип">
+                        <div className="text-sm text-muted-foreground">{item.contentType || "-"}</div>
+                      </FieldBlock>
+                      <FieldBlock label="Дата">
+                        <div className="text-sm text-muted-foreground">{formatCreatedAt(item.createdAt)}</div>
+                      </FieldBlock>
+                      <FieldBlock label="URL" className="sm:col-span-2">
+                        <div className="break-all text-sm text-muted-foreground">{url || "-"}</div>
+                      </FieldBlock>
                     </div>
 
-                    <div className="rowActions" style={{ justifyContent: "flex-end" }}>
+                    <div className="flex flex-wrap justify-end gap-2">
                       {url ? (
                         <Fragment>
-                          <button
-                            type="button"
-                            className="secondary"
-                            onClick={() => void copyText(url)}
-                          >
+                          <Button type="button" variant="outline" onClick={() => void copyText(url)}>
                             Копировать URL
-                          </button>
-                          <button type="button" className="secondary" onClick={() => window.open(url, "_blank")}>
+                          </Button>
+                          <Button type="button" variant="outline" onClick={() => window.open(url, "_blank")}>
                             Открыть
-                          </button>
+                          </Button>
                         </Fragment>
                       ) : null}
-                      <button type="button" className="danger" onClick={() => void onDelete(item)}>
+                      <Button type="button" variant="destructive" onClick={() => void onDelete(item)}>
                         Удалить
-                      </button>
+                      </Button>
                     </div>
-                  </div>
-                );
-              })}
-            </div>
-          ) : loadingData ? (
-            <small>Загрузка…</small>
-          ) : (
-            <small>Пока нет файлов. Загрузите фото выше.</small>
-          )}
-        </div>
-      </section>
+                  </CardContent>
+                </Card>
+              );
+            })}
+          </div>
+        ) : loadingData ? (
+          <EmptyState title="Загрузка..." description="Получаем список файлов из Firestore." />
+        ) : (
+          <EmptyState title="Пока нет файлов" description="Загрузите первое изображение через форму выше." />
+        )}
+      </SectionCard>
     </AdminShell>
   );
 }

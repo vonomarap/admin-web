@@ -1,6 +1,10 @@
 "use client";
 
 import { ReactNode, useEffect, useId, useState } from "react";
+import { ChevronDown } from "lucide-react";
+import { cn } from "../lib/utils";
+import { Card } from "./ui/card";
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "./ui/collapsible";
 
 export function CollapsibleSection({
   storageKey,
@@ -51,31 +55,25 @@ export function CollapsibleSection({
   };
 
   return (
-    <section className="card collapsible" data-open={open ? "true" : "false"}>
-      <button
-        type="button"
-        className="collapsibleHeader"
-        aria-expanded={open}
-        aria-controls={contentId}
-        onClick={toggle}
-      >
-        <div className="collapsibleHeaderText">
-          <h2>{title}</h2>
-          {subtitle ? <small>{subtitle}</small> : null}
-        </div>
-        <span className="collapsibleChevron" aria-hidden="true">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-            <path d="M6 9l6 6 6-6" />
-          </svg>
-        </span>
-      </button>
+    <Collapsible open={open} onOpenChange={() => toggle()}>
+      <Card className="overflow-hidden">
+        <CollapsibleTrigger
+          type="button"
+          className="flex w-full items-center justify-between gap-4 px-5 py-4 text-left hover:bg-muted/40"
+          aria-expanded={open}
+          aria-controls={contentId}
+        >
+          <div className="grid gap-1">
+            <h2>{title}</h2>
+            {subtitle ? <small>{subtitle}</small> : null}
+          </div>
+          <ChevronDown className={cn("h-4 w-4 transition-transform", open ? "rotate-180" : "")} aria-hidden="true" />
+        </CollapsibleTrigger>
 
-      {open ? (
-        <div id={contentId} className="collapsibleBody">
+        <CollapsibleContent id={contentId} className="px-5 pb-5">
           {children}
-        </div>
-      ) : null}
-    </section>
+        </CollapsibleContent>
+      </Card>
+    </Collapsible>
   );
 }
-

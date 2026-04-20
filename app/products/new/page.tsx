@@ -1,77 +1,56 @@
 "use client";
 
-import { FormEvent, useMemo, useState } from "react";
+import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { addDoc, collection, serverTimestamp } from "firebase/firestore";
+import { ArrowLeft, PackagePlus } from "lucide-react";
 import { db } from "../../../lib/firebase";
 import { useAdminSession } from "../../../components/AdminSessionProvider";
 import { AdminLoginScreen, LoadingScreen, MissingConfigScreen, NoAccessScreen } from "../../../components/AdminScreens";
 import { AdminShell } from "../../../components/AdminShell";
-import { MediaUploadButton } from "../../../components/forms/MediaUploadButton";
+import { FieldBlock, PageAlert, SectionCard, SwitchField } from "../../../components/admin-kit";
 import { ImageThumbPreview } from "../../../components/forms/ImageThumbPreview";
+import { MediaUploadButton } from "../../../components/forms/MediaUploadButton";
+import { Button } from "../../../components/ui/button";
+import { Input } from "../../../components/ui/input";
+import { NativeSelect } from "../../../components/ui/native-select";
+import { Textarea } from "../../../components/ui/textarea";
 
-function normalizeCurrency(value: string): string {
-  const code = (value || "").trim().toUpperCase();
-  return code || "RUB";
-}
-
-export default function NewProductPage(): JSX.Element {
+export default function ProductCreatePage(): JSX.Element {
   const session = useAdminSession();
   const router = useRouter();
+
+  const [title, setTitle] = useState("");
+  const [description, setDescription] = useState("");
+  const [priceFrom, setPriceFrom] = useState("");
+  const [image, setImage] = useState("");
+  const [active, setActive] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const goBack = () => router.push("/products");
+  const canSave = Boolean(title.trim()) && !saving;
 
   if (session.status === "loading") return <LoadingScreen />;
   if (session.status === "missing_config") return <MissingConfigScreen />;
   if (session.status === "signed_out") return <AdminLoginScreen title="Добавить товар" subtitle="Войдите под админским аккаунтом" />;
   if (session.status === "not_admin" || session.status === "role_check_failed") return <NoAccessScreen />;
 
-  const [title, setTitle] = useState("");
-  const [description, setDescription] = useState("");
-  const [priceFrom, setPriceFrom] = useState("120");
-  const [image, setImage] = useState("");
-  const [active, setActive] = useState(true);
-  const [saving, setSaving] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-
-  const goBack = () => {
-    if (typeof window !== "undefined" && window.history.length > 1) {
-      router.back();
-      return;
-    }
-    router.push("/products");
-  };
-
-  const canSave = useMemo(() => Boolean(title.trim()) && !saving, [saving, title]);
-
-  const onSubmit = async (event: FormEvent) => {
+  const onSubmit = async (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     if (!db) return;
 
-    const nextTitle = title.trim();
-    if (!nextTitle) return;
-
-    const price = Number(priceFrom);
-    if (!Number.isFinite(price) || price < 0) {
-      setError("Цена должна быть числом (0 или больше).");
-      return;
-    }
-
-    const sortOrder = Date.now() * 1000 + Math.floor(Math.random() * 1000);
-
-    const payload: Record<string, unknown> = {
-      title: nextTitle,
-      priceFrom: price || 0,
+    const parsedPrice = Number(priceFrom);
+    const payload = {
+      title: title.trim(),
+      description: description.trim() || undefined,
+      priceFrom: Number.isFinite(parsedPrice) ? parsedPrice : undefined,
       currency: "RUB",
-      active: Boolean(active),
-      sortOrder,
+      image: image.trim() || undefined,
+      active,
       createdAt: serverTimestamp(),
       updatedAt: serverTimestamp(),
     };
-
-    const desc = description.trim();
-    if (desc) payload.description = desc;
-
-    const img = image.trim();
-    if (img) payload.image = img;
 
     setSaving(true);
     setError(null);
@@ -91,63 +70,88 @@ export default function NewProductPage(): JSX.Element {
       title="Добавить товар"
       subtitle={session.user?.email ? `Доступно для ${session.user.email}` : "Доступно для админа"}
       rightActions={
-        <button type="button" className="secondary" onClick={goBack} disabled={saving}>
+        <Button type="button" variant="outline" onClick={goBack} disabled={saving}>
+          <ArrowLeft data-icon="inline-start" />
           Назад
-        </button>
+        </Button>
       }
     >
-      <section className="card" style={{ display: "grid", gap: 12 }}>
-        <h2>Данные товара</h2>
-        <form onSubmit={onSubmit} className="grid" style={{ gap: 10 }}>
-          <input placeholder="Название" value={title} onChange={(e) => setTitle(e.target.value)} required />
-          <textarea
-            rows={3}
-            placeholder="Описание (опционально)"
-            value={description}
-            onChange={(e) => setDescription(e.target.value)}
-          />
-          <div className="grid cols-2" style={{ gap: 10 }}>
-            <input placeholder="Цена от" value={priceFrom} onChange={(e) => setPriceFrom(e.target.value)} inputMode="decimal" />
-            <select value="RUB" disabled>
-              <option value="RUB">RUB</option>
-            </select>
-          </div>
-          <div style={{ display: "grid", gap: 8 }}>
-            <div className="rowActions" style={{ alignItems: "stretch" }}>
-              <input
-                placeholder="Ссылка на изображение (опционально)"
-                value={image}
-                onChange={(e) => setImage(e.target.value)}
-                autoCapitalize="none"
-                style={{ flex: 1, minWidth: 0 }}
-              />
-              <MediaUploadButton
-                folder="products"
-                label="Загрузить"
-                disabled={saving}
-                onUploaded={(urls) => setImage(urls[0] ?? "")}
-              />
+      <div className="flex flex-col gap-6">
+        <SectionCard
+          eyebrow="Каталог"
+          title="Новый товар"
+          description="Создайте базовую карточку каталога. Детальные особенности и спецификации можно дополнить позже прямо в списке товаров."
+          actions={<PackagePlus className="size-5 text-icon-accent" />}
+        >
+          <form onSubmit={onSubmit} className="grid gap-6">
+            <div className="grid gap-4 lg:grid-cols-2">
+              <FieldBlock label="Название">
+                <Input placeholder="Название" value={title} onChange={(e) => setTitle(e.target.value)} required />
+              </FieldBlock>
+
+              <FieldBlock label="Цена от">
+                <div className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_140px]">
+                  <Input placeholder="Цена от" value={priceFrom} onChange={(e) => setPriceFrom(e.target.value)} inputMode="decimal" />
+                  <NativeSelect value="RUB" disabled>
+                    <option value="RUB">RUB</option>
+                  </NativeSelect>
+                </div>
+              </FieldBlock>
+
+              <FieldBlock label="Описание" className="lg:col-span-2">
+                <Textarea
+                  rows={4}
+                  placeholder="Описание (опционально)"
+                  value={description}
+                  onChange={(e) => setDescription(e.target.value)}
+                />
+              </FieldBlock>
+
+              <FieldBlock
+                label="Изображение"
+                description="Можно загрузить фото в «Медиа» и вставить URL сюда."
+                className="lg:col-span-2"
+              >
+                <div className="grid gap-3">
+                  <div className="flex flex-col gap-3 sm:flex-row">
+                    <Input
+                      placeholder="Ссылка на изображение (опционально)"
+                      value={image}
+                      onChange={(e) => setImage(e.target.value)}
+                      autoCapitalize="none"
+                    />
+                    <MediaUploadButton
+                      folder="products"
+                      label="Загрузить"
+                      disabled={saving}
+                      onUploaded={(urls) => setImage(urls[0] ?? "")}
+                    />
+                  </div>
+                  <ImageThumbPreview url={image} />
+                </div>
+              </FieldBlock>
             </div>
-            <ImageThumbPreview url={image} />
-            <small>Можно загрузить фото в «Медиа» и вставить URL сюда.</small>
-          </div>
-          <label className="row" style={{ gap: 10, alignItems: "center" }}>
-            <input type="checkbox" checked={active} onChange={(e) => setActive(e.target.checked)} />
-            <span>Показывать в каталоге</span>
-          </label>
 
-          {error ? <div className="errorBox">{error}</div> : null}
+            <SwitchField
+              title="Показывать в каталоге"
+              description="Если отключить, товар сохранится в базе, но не будет виден на витрине."
+              checked={active}
+              onCheckedChange={setActive}
+            />
 
-          <div className="rowActions" style={{ justifyContent: "flex-end" }}>
-            <button type="button" className="secondary" onClick={goBack} disabled={saving}>
-              Отмена
-            </button>
-            <button type="submit" disabled={!canSave}>
-              {saving ? "Сохранение..." : "Сохранить"}
-            </button>
-          </div>
-        </form>
-      </section>
+            {error ? <PageAlert title="Не удалось создать товар" description={error} /> : null}
+
+            <div className="flex flex-wrap justify-end gap-3">
+              <Button type="button" variant="outline" onClick={goBack} disabled={saving}>
+                Отмена
+              </Button>
+              <Button type="submit" disabled={!canSave}>
+                {saving ? "Сохранение..." : "Сохранить"}
+              </Button>
+            </div>
+          </form>
+        </SectionCard>
+      </div>
     </AdminShell>
   );
 }

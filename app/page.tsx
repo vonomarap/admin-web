@@ -2,21 +2,31 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
-import { signOut } from "firebase/auth";
-import { collection, getDocs, orderBy, query } from "firebase/firestore";
-import { auth, db } from "../lib/firebase";
+import { collection, getCountFromServer, getDocs, orderBy, query } from "firebase/firestore";
+import {
+  ArrowUpRight,
+  Clock3,
+  MapPinned,
+  ShieldCheck,
+  TrendingUp,
+  TriangleAlert,
+} from "lucide-react";
+import { db } from "../lib/firebase";
 import { DAY_MS, dateKeyRange, presetRangeKeys, rangeKeysToUtcMs, toDateKeyUTC, toMillis } from "../lib/analytics";
 import { matchKanevskyPlaceFromAddress } from "../lib/geo/addressToKanevskyPlace";
 import { kanevskyDistrictBbox, kanevskyDistrictRing } from "../lib/geo/kanevskyDistrict";
 import { kanevskyPlaces } from "../lib/geo/kanevskyPlaces";
-import { STATUSES, STATUS_LABELS, normalizeStatus } from "../lib/quoteStatus";
+import { normalizeStatus } from "../lib/quoteStatus";
 import { useAdminSession } from "../components/AdminSessionProvider";
 import { AdminLoginScreen, LoadingScreen, MissingConfigScreen, NoAccessScreen } from "../components/AdminScreens";
 import { AdminShell } from "../components/AdminShell";
 import { TimeSeriesChart, type DailySeriesPoint } from "../components/charts/TimeSeriesChart";
-import { PieBreakdownChart, type PieDatum } from "../components/charts/PieBreakdownChart";
 import { DotDensityMap, type DotDensityPoint, type PlaceDot } from "../components/geo/DotDensityMap";
+import { Alert, AlertDescription, AlertTitle } from "../components/ui/alert";
+import { Badge } from "../components/ui/badge";
+import { Button } from "../components/ui/button";
+import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "../components/ui/card";
+import { Separator } from "../components/ui/separator";
 
 type Quote = {
   id: string;
@@ -26,29 +36,99 @@ type Quote = {
   createdAt?: unknown;
 };
 
+type PublicAnalyticsSummary = {
+  siteVisitsTotal: number;
+  productViewsTotal: number;
+  topProducts: Array<{
+    productId: string;
+    views: number;
+    title?: string;
+    image?: string;
+  }>;
+};
+
 function coerceNumber(value: unknown): number {
   const num = typeof value === "number" ? value : Number(value);
   return Number.isFinite(num) ? num : 0;
 }
 
+function formatInt(value: number): string {
+  return value.toLocaleString("ru-RU");
+}
+
+function formatPercent(value: number): string {
+  if (!Number.isFinite(value) || value <= 0) return "0%";
+  return `${value.toFixed(value >= 10 ? 0 : 1)}%`;
+}
+
+function KpiTile({
+  label,
+  value,
+  note,
+}: {
+  label: string;
+  value: string;
+  note: string;
+}): JSX.Element {
+  return (
+    <div className="flex flex-col gap-2 rounded-xl border border-border/70 bg-background/80 p-4">
+      <p className="text-xs font-medium uppercase tracking-[0.18em] text-muted-foreground">{label}</p>
+      <p className="text-3xl font-semibold tracking-tight text-foreground">{value}</p>
+      <p className="text-sm leading-relaxed text-muted-foreground">{note}</p>
+    </div>
+  );
+}
+
 export default function Home(): JSX.Element {
   const session = useAdminSession();
-  const router = useRouter();
 
   const [loadError, setLoadError] = useState<string | null>(null);
   const [loadingData, setLoadingData] = useState(false);
   const [quotes, setQuotes] = useState<Quote[]>([]);
+  const [publicAnalytics, setPublicAnalytics] = useState<PublicAnalyticsSummary>({
+    siteVisitsTotal: 0,
+    productViewsTotal: 0,
+    topProducts: [],
+  });
 
-  const loadQuotes = useCallback(async () => {
+  const loadOverviewData = useCallback(async () => {
     if (!db) return;
 
     setLoadError(null);
     setLoadingData(true);
     try {
-      const snap = await getDocs(query(collection(db, "quotes"), orderBy("createdAt", "desc")));
-      setQuotes(snap.docs.map((docRef) => ({ id: docRef.id, ...(docRef.data() as Omit<Quote, "id">) })));
+      const [quotesSnap, siteVisitsSnap, productViewsSnap] = await Promise.all([
+        getDocs(query(collection(db, "quotes"), orderBy("createdAt", "desc"))),
+        getCountFromServer(collection(db, "site_visit_sessions")),
+        getDocs(query(collection(db, "product_view_totals"), orderBy("viewsTotal", "desc"))),
+      ]);
+      const rankedProducts = productViewsSnap.docs
+        .map((docRef) => {
+          const record = docRef.data() as Record<string, unknown>;
+          const views = typeof record.viewsTotal === "number" && Number.isFinite(record.viewsTotal)
+            ? Math.max(0, Math.round(record.viewsTotal))
+            : 0;
+          if (!views) return null;
+          const title = typeof record.title === "string" ? record.title.trim() : "";
+          const image = typeof record.image === "string" ? record.image.trim() : "";
+          return {
+            productId: docRef.id,
+            views,
+            ...(title ? { title } : {}),
+            ...(image ? { image } : {}),
+          };
+        })
+        .filter((item): item is PublicAnalyticsSummary["topProducts"][number] => Boolean(item));
+
+      setPublicAnalytics({
+        siteVisitsTotal: siteVisitsSnap.data().count,
+        productViewsTotal: rankedProducts.reduce((sum, item) => sum + item.views, 0),
+        topProducts: rankedProducts.slice(0, 3),
+      });
+
+      setQuotes(quotesSnap.docs.map((docRef) => ({ id: docRef.id, ...(docRef.data() as Omit<Quote, "id">) })));
     } catch (error) {
-      console.error("Admin loadQuotes failed:", error);
+      console.error("Admin loadOverviewData failed:", error);
       setLoadError(error instanceof Error ? error.message : String(error));
     } finally {
       setLoadingData(false);
@@ -57,8 +137,8 @@ export default function Home(): JSX.Element {
 
   useEffect(() => {
     if (session.status !== "ready") return;
-    void loadQuotes();
-  }, [loadQuotes, session.status]);
+    void loadOverviewData();
+  }, [loadOverviewData, session.status]);
 
   useEffect(() => {
     if (session.status !== "ready") return;
@@ -68,7 +148,7 @@ export default function Home(): JSX.Element {
 
     const refresh = () => {
       if (loadingData) return;
-      void loadQuotes();
+      void loadOverviewData();
     };
 
     const onVisibility = () => {
@@ -81,7 +161,7 @@ export default function Home(): JSX.Element {
       win.removeEventListener?.("focus", refresh);
       docRef.removeEventListener?.("visibilitychange", onVisibility);
     };
-  }, [loadQuotes, loadingData, session.status]);
+  }, [loadOverviewData, loadingData, session.status]);
 
   const totals = useMemo(() => {
     const sinceMs = Date.now() - 24 * 60 * 60 * 1000;
@@ -121,11 +201,6 @@ export default function Home(): JSX.Element {
       seriesMap.set(key, { dateKey: key, leads: 0, confirmed: 0, revenue: 0 });
     }
 
-    const counts: Record<string, number> = {};
-    const bump = (key: string) => {
-      counts[key] = (counts[key] ?? 0) + 1;
-    };
-
     for (const quote of quotes) {
       const createdMs = toMillis(quote.createdAt);
       if (createdMs === null || rangeMs === null) continue;
@@ -137,28 +212,15 @@ export default function Home(): JSX.Element {
 
       point.leads += 1;
 
-      const status = normalizeStatus(quote.status);
-      bump(status);
-
-      if (status === "CONFIRMED") {
+      if (normalizeStatus(quote.status) === "CONFIRMED") {
         point.confirmed += 1;
         point.revenue += coerceNumber(quote.totalPrice);
       }
     }
 
-    const series = keys.map((key) => seriesMap.get(key) ?? { dateKey: key, leads: 0, confirmed: 0, revenue: 0 });
-
-    const pie: PieDatum[] = [];
-    for (const status of STATUSES) {
-      const value = counts[status] ?? 0;
-      if (!value) continue;
-      pie.push({ key: status, name: STATUS_LABELS[status] ?? status, value });
-    }
-    if (counts.OTHER) {
-      pie.push({ key: "OTHER", name: STATUS_LABELS.OTHER, value: counts.OTHER });
-    }
-
-    return { series, pie, keys };
+    return {
+      series: keys.map((key) => seriesMap.get(key) ?? { dateKey: key, leads: 0, confirmed: 0, revenue: 0 }),
+    };
   }, [quotes, range30d.endKey, range30d.startKey]);
 
   const geo365 = useMemo(() => {
@@ -235,6 +297,24 @@ export default function Home(): JSX.Element {
     return { points, places, totalQuotes, matchedQuotes, unknownQuotes, truncated };
   }, [quotes, range365d.endKey, range365d.startKey]);
 
+  const overview = useMemo(() => {
+    const leads30d = charts30d.series.reduce((acc, item) => acc + item.leads, 0);
+    const revenue30d = charts30d.series.reduce((acc, item) => acc + item.revenue, 0);
+    const confirmationRate = totals.count ? (totals.confirmed / totals.count) * 100 : 0;
+    const averageCheck = totals.confirmed ? totals.revenue / totals.confirmed : 0;
+    const geoCoverage = geo365.totalQuotes ? (geo365.matchedQuotes / geo365.totalQuotes) * 100 : 0;
+    const topPlaces = [...geo365.places].filter((place) => place.count > 0).sort((a, b) => b.count - a.count).slice(0, 5);
+
+    return {
+      leads30d,
+      revenue30d,
+      confirmationRate,
+      averageCheck,
+      geoCoverage,
+      topPlaces,
+    };
+  }, [charts30d.series, geo365.matchedQuotes, geo365.places, geo365.totalQuotes, totals.confirmed, totals.count, totals.revenue]);
+
   if (session.status === "loading") return <LoadingScreen />;
   if (session.status === "missing_config") return <MissingConfigScreen />;
   if (session.status === "signed_out") return <AdminLoginScreen />;
@@ -242,157 +322,352 @@ export default function Home(): JSX.Element {
 
   return (
     <AdminShell
-      title="Панель администратора"
-      subtitle={session.user?.email ?? ""}
-      rightActions={
-        <>
-          <button className="secondary" onClick={() => void loadQuotes()} disabled={loadingData}>
-            Обновить
-          </button>
-          <button onClick={() => void signOut(auth!)} disabled={!auth}>
-            Выйти
-          </button>
-        </>
-      }
+      title="Обзор"
+      subtitle={session.user?.email ?? "Администратор"}
     >
-      <div className="dashboardGrid">
+      <div className="flex flex-col gap-6">
         {loadError ? (
-          <section className="card noticeCard noticeCard-error dashboardCol-12">
-            <h3 style={{ marginBottom: 6 }}>Ошибка загрузки данных</h3>
-            <small className="noticeText-danger">{loadError}</small>
-          </section>
+          <Alert variant="destructive">
+            <TriangleAlert />
+            <AlertTitle>Ошибка загрузки данных</AlertTitle>
+            <AlertDescription>{loadError}</AlertDescription>
+          </Alert>
         ) : null}
 
-        <section className="card dashboardHero dashboardCol-5">
-          <div className="dashboardHeroHeader">
-            <div>
-              <div className="dashboardHello">Привет!</div>
-              <small className="breakLong">{session.user?.email ?? "Администратор"}</small>
-            </div>
-            <div className="dashboardHeroMeta">
-              <small>Общая информация</small>
-            </div>
-          </div>
+        <Card className="overflow-hidden border-border/80 bg-gradient-to-br from-card via-card to-accent/5">
+          <CardHeader className="gap-6">
+            <div className="flex flex-col gap-6 xl:flex-row xl:items-start xl:justify-between">
+              <div className="flex max-w-3xl flex-col gap-4">
+                <div className="flex flex-wrap items-center gap-2">
+                  <Badge variant={loadError ? "destructive" : loadingData ? "secondary" : "success"}>
+                    {loadError ? "Есть ошибка синхронизации" : loadingData ? "Обновляем данные" : "Система в норме"}
+                  </Badge>
+                  <Badge variant="outline">30 / 365 дней, UTC</Badge>
+                  <Badge variant="muted" className="max-w-full truncate sm:max-w-[340px]">
+                    {session.user?.email ?? "Администратор"}
+                  </Badge>
+                </div>
 
-          <div className="dashboardHeroNumbers">
-            <div className="dashboardHeroNumber">
-              <div className="dashboardHeroValue">{totals.count}</div>
-              <div className="dashboardHeroLabel">заявок всего</div>
-            </div>
-            <div className="dashboardHeroNumber">
-              <div className="dashboardHeroValue">{totals.confirmed}</div>
-              <div className="dashboardHeroLabel">подтверждено</div>
-            </div>
-          </div>
+                <div className="flex flex-col gap-2">
+                  <CardTitle className="text-3xl sm:text-4xl">Операционный центр</CardTitle>
+                  <CardDescription className="max-w-2xl text-base leading-relaxed">
+                    Единый срез по потоку заявок, подтверждениям, выручке и географии. Страница собрана как шорт-лист для
+                    ежедневных решений, без переходов между разделами.
+                  </CardDescription>
+                </div>
 
-          <div className="dashboardHeroFooter">
-            <button type="button" className="secondary small" onClick={() => router.push("/quotes")}>
-              Открыть заявки
-            </button>
-            <button type="button" className="secondary small" onClick={() => router.push("/analytics")}>
-              Статистика
-            </button>
-          </div>
-        </section>
+                <div className="flex flex-wrap gap-3">
+                  <Button asChild>
+                    <Link href="/quotes">
+                      Открыть заявки
+                      <ArrowUpRight data-icon="inline-end" />
+                    </Link>
+                  </Button>
+                  <Button asChild variant="outline">
+                    <Link href="/analytics">
+                      Открыть аналитику
+                      <ArrowUpRight data-icon="inline-end" />
+                    </Link>
+                  </Button>
+                </div>
+              </div>
 
-        <section className="card dashboardStat dashboardStatGlow dashboardCol-4">
-          <h3>Заявки за 24 часа</h3>
-          <p className="statValue">
-            <span className="statValueAccent statValueWithDot">
-              {totals.last24h}
-              {totals.last24h > 0 ? <span className="pulseDot pulseDot-success" aria-hidden="true" /> : null}
+              <div className="grid min-w-[min(100%,320px)] gap-3 rounded-xl border border-border/70 bg-background/80 p-4 xl:max-w-sm">
+                <div className="flex items-center gap-2 text-xs font-medium uppercase tracking-[0.18em] text-muted-foreground">
+                  <ShieldCheck className="size-4 text-icon-accent" />
+                  Срез панели
+                </div>
+                <div className="flex items-center justify-between gap-4 text-sm">
+                  <span className="text-muted-foreground">Заявок за 30 дней</span>
+                  <span className="font-semibold text-foreground">{formatInt(overview.leads30d)}</span>
+                </div>
+                <Separator />
+                <div className="flex items-center justify-between gap-4 text-sm">
+                  <span className="text-muted-foreground">Выручка за 30 дней</span>
+                  <span className="font-semibold text-foreground">{formatInt(overview.revenue30d)}</span>
+                </div>
+                <Separator />
+                <div className="flex items-center justify-between gap-4 text-sm">
+                  <span className="text-muted-foreground">Доминирующий статус</span>
+                  <span className="font-semibold text-foreground">См. аналитику заявок</span>
+                </div>
+              </div>
+            </div>
+          </CardHeader>
+
+          <CardContent className="grid gap-3 md:grid-cols-3">
+            <KpiTile
+              label="Конверсия"
+              value={formatPercent(overview.confirmationRate)}
+              note="Доля подтвержденных заявок среди всего накопленного потока."
+            />
+            <KpiTile
+              label="Средний чек"
+              value={formatInt(overview.averageCheck)}
+              note="Средняя выручка по подтвержденным заявкам за все время."
+            />
+            <KpiTile
+              label="Покрытие адресов"
+              value={formatPercent(overview.geoCoverage)}
+              note="Часть заявок за 365 дней, для которых удалось распознать населенный пункт."
+            />
+          </CardContent>
+        </Card>
+
+        <div className="grid gap-4 xl:grid-cols-[minmax(0,1.6fr)_minmax(280px,1fr)]">
+          <Card className="border-border/80">
+            <CardHeader className="gap-3">
+              <div className="flex items-center justify-between gap-3">
+                <div className="flex flex-col gap-1">
+                  <CardDescription>Главные показатели</CardDescription>
+                  <CardTitle>Поток и деньги</CardTitle>
+                </div>
+                <Badge variant="outline">Lifetime</Badge>
+              </div>
+            </CardHeader>
+            <CardContent className="grid gap-3 sm:grid-cols-3">
+              <div className="flex flex-col gap-2 rounded-xl border border-border/70 bg-background/70 p-4">
+                <p className="text-sm text-muted-foreground">Все заявки</p>
+                <p className="text-4xl font-semibold tracking-tight">{formatInt(totals.count)}</p>
+                <p className="text-sm text-muted-foreground">Накопленный объем входящего потока.</p>
+              </div>
+              <div className="flex flex-col gap-2 rounded-xl border border-border/70 bg-background/70 p-4">
+                <p className="text-sm text-muted-foreground">Подтверждено</p>
+                <p className="text-4xl font-semibold tracking-tight">{formatInt(totals.confirmed)}</p>
+                <p className="text-sm text-muted-foreground">Заявки со статусом CONFIRMED.</p>
+              </div>
+              <div className="flex flex-col gap-2 rounded-xl border border-border/70 bg-background/70 p-4">
+                <p className="text-sm text-muted-foreground">Выручка</p>
+                <p className="text-4xl font-semibold tracking-tight">{formatInt(totals.revenue)}</p>
+                <p className="text-sm text-muted-foreground">Сумма `totalPrice` по подтвержденным лидам.</p>
+              </div>
+            </CardContent>
+            <CardFooter className="flex flex-wrap items-center justify-between gap-3 text-sm text-muted-foreground">
+              <span>Основной накопительный итог без фильтров.</span>
+              <Button asChild variant="outline" size="sm">
+                <Link href="/quotes">
+                  Смотреть заявки
+                  <ArrowUpRight data-icon="inline-end" />
+                </Link>
+              </Button>
+            </CardFooter>
+          </Card>
+
+          <Card className="border-border/80">
+            <CardHeader className="gap-1">
+              <CardDescription>Последние 24 часа</CardDescription>
+              <CardTitle>Свежий вход</CardTitle>
+            </CardHeader>
+            <CardContent className="flex flex-col gap-4">
+              <div className="flex items-center gap-3">
+                <div className="flex size-11 items-center justify-center rounded-xl bg-muted text-foreground">
+                  <Clock3 className="size-5" />
+                </div>
+                <Badge variant={totals.last24h > 0 ? "success" : "muted"}>
+                  {totals.last24h > 0 ? "Есть новые лиды" : "Пауза в потоке"}
+                </Badge>
+              </div>
+              <div className="flex items-end gap-3">
+                <p className="text-5xl font-semibold tracking-tight">{formatInt(totals.last24h)}</p>
+                <p className="pb-1 text-sm text-muted-foreground">заявок за сутки</p>
+              </div>
+              <p className="text-sm leading-relaxed text-muted-foreground">
+                Быстрый индикатор нагрузки для команды и скорости первичного отклика.
+              </p>
+            </CardContent>
+            <CardFooter className="flex flex-wrap items-center justify-between gap-3">
+              <Badge variant="outline">Всего в системе: {formatInt(totals.count)}</Badge>
+              <Button asChild variant="outline" size="sm">
+                <Link href="/quotes">
+                  В очередь заявок
+                  <ArrowUpRight data-icon="inline-end" />
+                </Link>
+              </Button>
+            </CardFooter>
+          </Card>
+        </div>
+
+        <Card className="border-border/80">
+          <CardHeader className="gap-3">
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+              <div className="flex flex-col gap-1">
+                <CardDescription>Публичная витрина</CardDescription>
+                <CardTitle>Заходы на сайт и интерес к товарам</CardTitle>
+              </div>
+              <div className="flex flex-wrap gap-2">
+                <Badge variant="outline">Заходы: {formatInt(publicAnalytics.siteVisitsTotal)}</Badge>
+                <Badge variant="outline">Просмотры: {formatInt(publicAnalytics.productViewsTotal)}</Badge>
+              </div>
+            </div>
+          </CardHeader>
+          <CardContent className="grid gap-4 xl:grid-cols-[minmax(0,320px)_minmax(0,1fr)]">
+            <div className="flex flex-col gap-3 rounded-xl border border-border/70 bg-background/70 p-4">
+              <p className="text-sm text-muted-foreground">Заходов на сайт за все время</p>
+              <p className="text-4xl font-semibold tracking-tight">{formatInt(publicAnalytics.siteVisitsTotal)}</p>
+              <p className="text-sm leading-relaxed text-muted-foreground">
+                Метрика считает уникальные сессии по 30-минутному окну и совпадает с тем, что показывается на главной.
+              </p>
+            </div>
+
+            <div className="rounded-xl border border-border/70 bg-background/70 p-4">
+              <div className="flex items-center justify-between gap-3">
+                <h3 className="!text-sm !tracking-normal">Топ товаров по просмотрам</h3>
+                <Badge variant="outline">{publicAnalytics.topProducts.length}</Badge>
+              </div>
+              <div className="mt-4 flex flex-col gap-3">
+                {publicAnalytics.topProducts.length ? (
+                  publicAnalytics.topProducts.map((item) => (
+                    <div key={item.productId} className="flex items-center justify-between gap-3 text-sm">
+                      <span className="truncate text-muted-foreground">{item.title || item.productId}</span>
+                      <span className="font-semibold text-foreground">{formatInt(item.views)}</span>
+                    </div>
+                  ))
+                ) : (
+                  <p className="text-sm text-muted-foreground">Пока нет просмотров товаров для ранжирования.</p>
+                )}
+              </div>
+            </div>
+          </CardContent>
+          <CardFooter className="flex flex-wrap items-center justify-between gap-3 text-sm text-muted-foreground">
+            <span>Эти данные обновляются вместе с публичным summary-документом для главной страницы.</span>
+            <Button asChild variant="outline" size="sm">
+              <Link href="/analytics">
+                Открыть детализацию
+                <ArrowUpRight data-icon="inline-end" />
+              </Link>
+            </Button>
+          </CardFooter>
+        </Card>
+
+        <div className="grid gap-4">
+          <Card className="border-border/80">
+            <CardHeader className="gap-3">
+              <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                <div className="flex flex-col gap-1">
+                  <CardTitle>Динамика лидов, подтверждений и выручки</CardTitle>
+                  <CardDescription>
+                    Последние 30 дней. Одна панель показывает как объем входящего потока, так и деньги.
+                  </CardDescription>
+                </div>
+                <Button asChild variant="outline" size="sm">
+                  <Link href="/analytics">
+                    В аналитику
+                    <ArrowUpRight data-icon="inline-end" />
+                  </Link>
+                </Button>
+              </div>
+            </CardHeader>
+            <CardContent className="flex flex-col gap-4">
+              <TimeSeriesChart data={charts30d.series} />
+            </CardContent>
+            <CardFooter className="flex flex-wrap items-center justify-between gap-3 text-sm text-muted-foreground">
+              <span>
+                {range30d.startKey} - {range30d.endKey} (UTC)
+              </span>
+              <div className="flex flex-wrap gap-2">
+                <Badge variant="outline">Лидов: {formatInt(overview.leads30d)}</Badge>
+                <Badge variant="outline">Выручка: {formatInt(overview.revenue30d)}</Badge>
+              </div>
+            </CardFooter>
+          </Card>
+        </div>
+
+        <Card className="border-border/80">
+          <CardHeader className="gap-4">
+            <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+              <div className="flex flex-col gap-1">
+                <CardTitle>Карта заявок по Каневскому району</CardTitle>
+                <CardDescription>
+                  Окно 365 дней. Локация определяется по совпадению населенного пункта в `quotes.address`, без внешних геосервисов.
+                </CardDescription>
+              </div>
+              <div className="flex flex-wrap gap-2">
+                <Badge variant={overview.geoCoverage >= 60 ? "success" : overview.geoCoverage > 0 ? "secondary" : "muted"}>
+                  Покрытие: {formatPercent(overview.geoCoverage)}
+                </Badge>
+                {geo365.truncated ? <Badge variant="destructive">Ограничено: 10 000</Badge> : null}
+              </div>
+            </div>
+          </CardHeader>
+          <CardContent className="grid gap-4 xl:grid-cols-[minmax(0,1.7fr)_320px]">
+            <div className="overflow-hidden rounded-xl border border-border/70 bg-background/70 p-3">
+              <DotDensityMap
+                bbox={kanevskyDistrictBbox}
+                ring={kanevskyDistrictRing}
+                points={geo365.points}
+                places={geo365.places}
+                showTooltip
+                minHeight={360}
+              />
+            </div>
+
+            <div className="flex flex-col gap-3">
+              <div className="grid gap-3 sm:grid-cols-3 xl:grid-cols-1">
+                <div className="flex flex-col gap-2 rounded-xl border border-border/70 bg-background/70 p-4">
+                  <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                    <MapPinned className="size-4" />
+                    Распознано
+                  </div>
+                  <p className="text-3xl font-semibold tracking-tight">{formatInt(geo365.matchedQuotes)}</p>
+                </div>
+                <div className="flex flex-col gap-2 rounded-xl border border-border/70 bg-background/70 p-4">
+                  <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                    <TrendingUp className="size-4" />
+                    Всего в окне
+                  </div>
+                  <p className="text-3xl font-semibold tracking-tight">{formatInt(geo365.totalQuotes)}</p>
+                </div>
+                <div className="flex flex-col gap-2 rounded-xl border border-border/70 bg-background/70 p-4">
+                  <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                    <TriangleAlert className="size-4" />
+                    Не распознано
+                  </div>
+                  <p className="text-3xl font-semibold tracking-tight">{formatInt(geo365.unknownQuotes)}</p>
+                </div>
+              </div>
+
+              <div className="rounded-xl border border-border/70 bg-background/70 p-4">
+                <div className="flex items-center justify-between gap-3">
+                  <h3 className="!text-sm !tracking-normal">Топ населенных пунктов</h3>
+                  <Badge variant="outline">{overview.topPlaces.length}</Badge>
+                </div>
+                <div className="mt-4 flex flex-col gap-3">
+                  {overview.topPlaces.length ? (
+                    overview.topPlaces.map((place) => (
+                      <div key={place.id} className="flex items-center justify-between gap-3 text-sm">
+                        <span className="truncate text-muted-foreground">{place.name}</span>
+                        <span className="font-semibold text-foreground">{formatInt(place.count)}</span>
+                      </div>
+                    ))
+                  ) : (
+                    <p className="text-sm text-muted-foreground">Пока нет распознанных точек для ранжирования.</p>
+                  )}
+                </div>
+              </div>
+
+              {geo365.truncated ? (
+                <Alert variant="warning">
+                  <TriangleAlert />
+                  <AlertTitle>Сработал лимит окна</AlertTitle>
+                  <AlertDescription>
+                    В карту попали только первые 10 000 заявок из годового диапазона. Для полного анализа откройте раздел статистики.
+                  </AlertDescription>
+                </Alert>
+              ) : null}
+            </div>
+          </CardContent>
+          <CardFooter className="flex flex-wrap items-center justify-between gap-3 text-sm text-muted-foreground">
+            <span>
+              {range365d.startKey} - {range365d.endKey} (UTC)
             </span>
-          </p>
-	          <div className="dashboardFooterRow">
-	            <small>Всего: {totals.count}</small>
-	            <button type="button" className="secondary small" onClick={() => router.push("/quotes")}>
-	              Заявки
-	            </button>
-	          </div>
-	        </section>
-
-        <section className="card dashboardStat dashboardCol-3">
-          <h3>Подтверждено / Выручка</h3>
-          <p className="statValue">
-            <span className="statValueAccent">{totals.confirmed}</span> /{" "}
-            <span className="statValueAccent">{totals.revenue.toLocaleString("ru-RU")}</span>
-          </p>
-          <div className="dashboardFooterRow">
-            <small>За всё время</small>
-            <button type="button" className="secondary small" onClick={() => router.push("/analytics")}>
-              Статистика
-            </button>
-          </div>
-        </section>
-
-        <section className="card dashboardCol-7">
-          <h3>Динамика заявок (30 дней)</h3>
-          <TimeSeriesChart data={charts30d.series} />
-          <div className="dashboardFooterRow">
-            <small>
-              {range30d.startKey} — {range30d.endKey} (UTC)
-            </small>
-            <button type="button" className="secondary small" onClick={() => router.push("/analytics")}>
-              Статистика
-            </button>
-          </div>
-        </section>
-
-        <section className="card dashboardCol-5">
-          <h3>Статусы заявок (30 дней)</h3>
-          <PieBreakdownChart data={charts30d.pie} />
-          <div className="dashboardFooterRow">
-            <small>По дате создания</small>
-            <button type="button" className="secondary small" onClick={() => router.push("/quotes")}>
-              Заявки
-            </button>
-          </div>
-        </section>
-
-        <section className="card dashboardCol-12">
-          <h3>Карта заявок (365 дней)</h3>
-          <DotDensityMap
-            bbox={kanevskyDistrictBbox}
-            ring={kanevskyDistrictRing}
-            points={geo365.points}
-            places={geo365.places}
-            showTooltip
-            minHeight={320}
-          />
-          <div className="dashboardFooterRow">
-            <small>
-              {range365d.startKey} — {range365d.endKey} (UTC) · Всего: {geo365.totalQuotes} · Распознано:{" "}
-              {geo365.matchedQuotes} · Не распознано: {geo365.unknownQuotes}
-              {geo365.truncated ? " · Ограничено: 10 000" : null}
-            </small>
-            <button type="button" className="secondary small" onClick={() => router.push("/analytics")}>
-              Статистика
-            </button>
-          </div>
-        </section>
-
-        <section className="dashboardTiles dashboardCol-12">
-          <Link href="/products" className="card tileCard">
-            <div className="tileTitle">Товары</div>
-            <small className="tileSubtitle">Каталог, цены, видимость</small>
-          </Link>
-          <Link href="/gallery" className="card tileCard">
-            <div className="tileTitle">Портфолио</div>
-            <small className="tileSubtitle">Работы, фото, публикация</small>
-          </Link>
-          <Link href="/quotes" className="card tileCard">
-            <div className="tileTitle">Заявки</div>
-            <small className="tileSubtitle">Фильтры, статусы, детали</small>
-          </Link>
-          <Link href="/settings/site" className="card tileCard">
-            <div className="tileTitle">Сайт</div>
-            <small className="tileSubtitle">Футер, контакты, ссылки</small>
-          </Link>
-          <Link href="/settings/calc" className="card tileCard">
-            <div className="tileTitle">Калькулятор</div>
-            <small className="tileSubtitle">Настройки расчёта</small>
-          </Link>
-        </section>
+            <Button asChild variant="outline" size="sm">
+              <Link href="/analytics">
+                Полная геоаналитика
+                <ArrowUpRight data-icon="inline-end" />
+              </Link>
+            </Button>
+          </CardFooter>
+        </Card>
       </div>
     </AdminShell>
   );
